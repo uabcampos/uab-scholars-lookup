@@ -131,18 +131,17 @@ Produces:
 - `users_by_department.csv`  
   with `objectId`, first and last name, email, departments and positions.
 
-### 4. Pull a single user’s profile, pubs, grants, and teaching activities
+### 4. Pull a single user’s profile, pubs and grants
 
 ```bash
 python pull_scholar_profile_by_user_csvs.py
 ```
 
 Produces four files for the specified `USER_ID`:
-
-- `<slug>_profile.csv`  
-- `<slug>_publications.csv`  
-- `<slug>_grants.csv`
-- `<slug>_teaching_activities.csv`
+  - `<slug>_profile.csv`  
+  - `<slug>_publications.csv`  
+  - `<slug>_grants.csv`  
+  - `<slug>_teaching_activities.csv`
 
 ---
 
