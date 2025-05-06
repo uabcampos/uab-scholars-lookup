@@ -57,10 +57,11 @@ All outputs are CSV files so you can load them into Excel, a database or your fa
   Query the API search endpoint in parallel to find every user whose `positions.department` contains your department substring. Writes a single CSV of `objectId`, name, email, departments and positions.
 
 - **pull_scholar_profile_by_user_csvs.py**  
-  Given a single numeric `USER_ID`, fetches that user’s profile, research interests, teaching summary, publications and grants. Cleans all text fields and writes three separate CSVs:  
+  Given a single numeric `USER_ID`, fetches that user’s profile, research interests, teaching summary, publications, grants, and teaching activities. Cleans all text fields and writes four separate CSVs:  
   - `<slug>_profile.csv`  
   - `<slug>_publications.csv`  
-  - `<slug>_grants.csv`
+  - `<slug>_grants.csv`  
+  - `<slug>_teaching_activities.csv`
 
 ---
 
@@ -130,17 +131,18 @@ Produces:
 - `users_by_department.csv`  
   with `objectId`, first and last name, email, departments and positions.
 
-### 4. Pull a single user’s profile, pubs and grants
+### 4. Pull a single user’s profile, pubs, grants, and teaching activities
 
 ```bash
 python pull_scholar_profile_by_user_csvs.py
 ```
 
-Produces three files for the specified `USER_ID`:
+Produces four files for the specified `USER_ID`:
 
 - `<slug>_profile.csv`  
 - `<slug>_publications.csv`  
 - `<slug>_grants.csv`
+- `<slug>_teaching_activities.csv`
 
 ---
 
