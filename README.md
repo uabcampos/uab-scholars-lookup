@@ -1,13 +1,14 @@
 # UAB Scholars API Data Puller
 
-This collection of Python scripts automates pulling faculty data from the UAB Scholars API. You can:
+This collection of Python scripts automates the process of pulling faculty data from the UAB Scholars API. You can:
 
 - Pull full profiles (bio, roles, contact, research interests, teaching summary)  
 - Export publications, grants and teaching activities  
 - Search by a list of faculty names  
-- Search by department and export matching profiles  
+- Search by department (concurrent and non-concurrent)  
+- Pull a single user’s complete profile and write separate CSVs  
 
-All outputs are written to CSV files so you can load them into Excel, a database or your favorite analysis tool.
+All outputs are CSV files so you can load them into Excel, a database or your favorite analysis tool.
 
 ---
 
@@ -15,23 +16,20 @@ All outputs are written to CSV files so you can load them into Excel, a database
 
 - **Python 3.9+**  
 - **requests** library  
-- (Optional) **pandas** & **openpyxl** if you want Excel output  
+- (Optional) **pandas** and **openpyxl** if you want Excel output  
 - Internet access to `scholars.uab.edu`
 
 ---
 
 ## 🛠 Installation
 
-1. Clone or download this repo.  
-2. Create and activate a virtual environment:
-
+1. Clone or download this repo  
+2. Create and activate a virtual environment  
    ```bash
    python3 -m venv venv
    source venv/bin/activate
-   ```
-
-3. Install dependencies:
-
+   ```  
+3. Install dependencies  
    ```bash
    pip install requests
    # If you plan to export to Excel:
@@ -43,36 +41,45 @@ All outputs are written to CSV files so you can load them into Excel, a database
 ## 📂 File Overview
 
 - **faculty_fullnames.py**  
-  A Python file exporting a list of faculty full names, used by `pull_master_scholars_by_faculty_list.py`.
+  A Python file exporting `faculty_fullnames`, a list of full names (First [M.] Last).
 
 - **pull_master_scholars_by_faculty_list.py**  
-  Pulls profiles, publications, grants and teaching activities for each name in `faculty_fullnames.py`.
+  Pulls profiles, publications, grants and teaching activities for each name in `faculty_fullnames.py`.  
+  Cleans mojibake and curly quotes/dashes.
 
-- **search_by_department.py**  
-  Scans all numeric user IDs up to `MAX_ID`, filters by a department substring, and exports basic contact info.
+- **pull_master_scholars_by_dept_concurrent.py**  
+  Two-phase concurrent scanner:  
+  1. Scan numeric IDs up to `MAX_ID` in parallel, find matching department  
+  2. Fetch each user’s profile, publications, grants and teaching activities in parallel  
+  Outputs four CSVs.
 
-- **pull_department_scholars.py**  
-  Combines profile, publication, grant and teaching‐activity pulls for everyone in a given department.
+- **search_by_department_concurrent.py**  
+  Query the API search endpoint in parallel to find every user whose `positions.department` contains your department substring. Writes a single CSV of `objectId`, name, email, departments and positions.
 
-- **README.md**  
-  This document.
+- **pull_scholar_profile_by_user_csvs.py**  
+  Given a single numeric `USER_ID`, fetches that user’s profile, research interests, teaching summary, publications and grants. Cleans all text fields and writes three separate CSVs:  
+  - `<slug>_profile.csv`  
+  - `<slug>_publications.csv`  
+  - `<slug>_grants.csv`
 
 ---
 
 ## ⚙️ Configuration
 
-Each script has a small “CONFIG” section at the top where you can adjust:
+Each script has a “CONFIG” section at the top where you can adjust:
 
-- **DEPARTMENT** – exact or substring match for department searches  
+- **DEPARTMENT** – substring used for department searches  
+- **MAX_ID** – upper bound on numeric user IDs (for ID scanners)  
 - **PER_PAGE_PUBS**, **PER_PAGE_GRANTS**, **PER_PAGE_TEACHING** – pagination sizes  
-- **MAX_ID** – upper bound on numeric user IDs (for department scanners)  
-- **PAUSE_SECONDS** – delay between requests to avoid rate limiting  
+- **PAUSE**, **PAUSE_SECONDS** – delay between requests to avoid rate limiting  
 
-Example in `search_by_department.py`:
+Example in `pull_master_scholars_by_dept_concurrent.py`:
 
 ```python
 DEPARTMENT     = "Med - Preventive Medicine"
 MAX_ID         = 6000
+SCAN_WORKERS   = 20
+FETCH_WORKERS  = 10
 PAUSE_SECONDS  = 0.1
 ```
 
@@ -80,7 +87,7 @@ PAUSE_SECONDS  = 0.1
 
 ## 🚀 Usage
 
-Activate your venv:
+Activate your virtual environment:
 
 ```bash
 source venv/bin/activate
@@ -99,46 +106,62 @@ Produces four CSVs:
 - `grants.csv`  
 - `teaching_activities.csv`
 
-### 2. Find faculty by department only
+### 2. Search by department (concurrent)
 
 ```bash
-python search_by_department.py
+python pull_master_scholars_by_dept_concurrent.py
+```
+
+Produces four CSVs for every user whose department matches:
+
+- `profiles.csv`  
+- `publications.csv`  
+- `grants.csv`  
+- `teaching_activities.csv`
+
+### 3. Search by department only (basic)
+
+```bash
+python search_by_department_concurrent.py
 ```
 
 Produces:
 
 - `users_by_department.csv`  
-  with object ID, first and last name, email, departments and positions.
+  with `objectId`, first and last name, email, departments and positions.
 
-### 3. Pull everything for a department
+### 4. Pull a single user’s profile, pubs and grants
 
 ```bash
-python pull_department_scholars.py
+python pull_scholar_profile_by_user_csvs.py
 ```
 
-Produces the same four CSVs as the master pull, but only for users whose positions include your `DEPARTMENT` string.
+Produces three files for the specified `USER_ID`:
+
+- `<slug>_profile.csv`  
+- `<slug>_publications.csv`  
+- `<slug>_grants.csv`
 
 ---
 
 ## 🛠 Troubleshooting
 
 - **Empty CSVs**  
-  - Verify your `DEPARTMENT` matches the API’s `department` fields (case-insensitive substring).  
-  - Increase `PAUSE_SECONDS` if you suspect rate limiting.
+  - Verify your department substring matches the API’s `department` fields (case-insensitive).  
+  - Increase `PAUSE` or `PAUSE_SECONDS` if you suspect rate limiting.
 
-- **“Could not resolve slug” errors**  
-  - Check name formatting in `faculty_fullnames.py`.  
-  - Remove middle initials or use exact first/last matches.
+- **Unicode or mojibake issues**  
+  - All scripts include a `clean_text` function to normalize Unicode, replace `‚Äì` and convert curly quotes/dashes to plain ASCII.
 
 - **Connection errors**  
   - Ensure you have internet access and the API is reachable.  
-  - Increase timeouts or `PAUSE_SECONDS`.
+  - Increase timeouts or pause delays.
 
 ---
 
 ## ❤️ Contributing
 
-Contributions and improvements are welcome. Feel free to open issues or submit pull requests.
+Contributions are welcome. Feel free to open issues or submit pull requests.
 
 ---
 
