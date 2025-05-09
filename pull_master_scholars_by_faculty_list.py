@@ -4,10 +4,10 @@
 """
 Master script: Pull complete Scholars@UAB profiles, publications, grants,
 and teaching activities for a list of faculty by name and write to four CSVs:
-- profiles.csv
-- publications.csv
-- grants.csv
-- teaching_activities.csv
+- profiles_YYYYMMDD_HHMMSS.csv
+- publications_YYYYMMDD_HHMMSS.csv
+- grants_YYYYMMDD_HHMMSS.csv
+- teaching_activities_YYYYMMDD_HHMMSS.csv
 
 Requires a faculty_fullnames.py file with:
     faculty_fullnames = [
@@ -21,6 +21,7 @@ import csv
 import time
 import requests
 import unicodedata
+from datetime import datetime
 
 from faculty_fullnames import faculty_fullnames
 
@@ -42,11 +43,14 @@ API_HEADERS = {
     "User-Agent":   "Mozilla/5.0"
 }
 
+# Get current timestamp for filenames
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+
 # ---- OUTPUT FILES & FIELDS -----------------------------------------------
-PROFILES_CSV      = "profiles.csv"
-PUBLICATIONS_CSV  = "publications.csv"
-GRANTS_CSV        = "grants.csv"
-TEACHING_CSV      = "teaching_activities.csv"
+PROFILES_CSV      = f"profiles_{TIMESTAMP}.csv"
+PUBLICATIONS_CSV  = f"publications_{TIMESTAMP}.csv"
+GRANTS_CSV        = f"grants_{TIMESTAMP}.csv"
+TEACHING_CSV      = f"teaching_activities_{TIMESTAMP}.csv"
 
 PROFILE_FIELDS    = [
     "objectId", "first", "last", "email", "orcid",
@@ -84,8 +88,8 @@ def clean_text(s: str) -> str:
     # en/em dashes and curly quotes
     subs = [
         ("\u2013", "-"), ("\u2014", "-"),
-        ("“", '"'), ("”", '"'),
-        ("‘", "'"), ("’", "'"),
+        (""", '"'), (""", '"'),
+        ("'", "'"), ("'", "'"),
     ]
     for orig, repl in subs:
         t = t.replace(orig, repl)
@@ -93,15 +97,92 @@ def clean_text(s: str) -> str:
     return " ".join(t.split())
 
 # ---- FIND & FETCH --------------------------------------------------------
+def get_name_variations(full_name: str) -> list:
+    """
+    Generate variations of a name to try different formats.
+    Returns a list of (first, last) tuples to try.
+    """
+    parts = full_name.split()
+    first, last = parts[0], parts[-1]
+    variations = [(first, last)]  # Start with original format
+    
+    # Common name variations
+    name_map = {
+        "Jim": "James J.",
+        "Kristen Allen-Watts": "Kristen Allen Watts",
+        "Alex": "Alexander",
+        "RJ": "Reaford J.",
+        "Bill": "William L.",
+        "Stan": "F. Stanford",
+        "Matt": "Matthew",
+        "Robert": "Robert A.",
+        "Terry": "Terrence M.",
+        "Ben": "Benjamin",
+        "Yu-Mei": "Yu Mei"
+    }
+    
+    # Handle special cases
+    if full_name in name_map:
+        alt_name = name_map[full_name]
+        alt_parts = alt_name.split()
+        if len(alt_parts) > 1:
+            # For multi-part names, try both the full name and just first/last
+            variations.append((alt_parts[0], alt_parts[-1]))
+            # Try with middle initial if present
+            if len(alt_parts) > 2:
+                variations.append((f"{alt_parts[0]} {alt_parts[1]}", alt_parts[-1]))
+        else:
+            variations.append((alt_name, last))
+    
+    # Handle hyphenated names
+    if "-" in full_name:
+        no_hyphen = full_name.replace("-", " ")
+        no_hyphen_parts = no_hyphen.split()
+        variations.append((no_hyphen_parts[0], no_hyphen_parts[-1]))
+        if len(no_hyphen_parts) > 2:
+            variations.append((no_hyphen_parts[0], f"{no_hyphen_parts[-2]} {no_hyphen_parts[-1]}"))
+    
+    # Handle Jr./Sr. cases
+    if "Jr" in last or "Sr" in last:
+        base_last = last.replace("Jr", "").replace("Sr", "").strip()
+        variations.append((first, base_last))
+        variations.append((first, f"{base_last}, Jr."))
+        variations.append((first, f"{base_last}, Sr."))
+        # Try with middle initial if present
+        if len(parts) > 2:
+            variations.append((f"{first} {parts[1]}", base_last))
+            variations.append((f"{first} {parts[1]}", f"{base_last}, Jr."))
+            variations.append((f"{first} {parts[1]}", f"{base_last}, Sr."))
+    
+    # Try with middle initial if present
+    if len(parts) > 2 and len(parts[-2]) == 1:  # Middle initial
+        variations.append((f"{first} {parts[-2]}", last))
+    
+    return variations
+
 def find_disc_id(full_name: str) -> str:
-    first, last = full_name.split()[0], full_name.split()[-1]
-    payload = {"params": {"by": "text", "type": "user", "text": f"{first} {last}"}}
-    r = session.post(API_USERS, json=payload, headers=API_HEADERS, timeout=15)
-    r.raise_for_status()
-    for u in r.json().get("resource", []):
-        if (u.get("firstName","").lower() == first.lower() and
-            u.get("lastName","").lower()  == last.lower()):
-            return u.get("discoveryUrlId")
+    """
+    Try to find a user's discoveryUrlId using various name formats.
+    """
+    variations = get_name_variations(full_name)
+    
+    for first, last in variations:
+        payload = {"params": {"by": "text", "type": "user", "text": f"{first} {last}"}}
+        r = session.post(API_USERS, json=payload, headers=API_HEADERS, timeout=15)
+        r.raise_for_status()
+        
+        for u in r.json().get("resource", []):
+            # Check if either the exact match or a close match
+            if (u.get("firstName","").lower() == first.lower() and
+                u.get("lastName","").lower() == last.lower()):
+                return u.get("discoveryUrlId")
+            
+            # Also check if the last name matches and first name is a variation
+            if (u.get("lastName","").lower() == last.lower() and
+                (u.get("firstName","").lower().startswith(first.lower()) or
+                 first.lower().startswith(u.get("firstName","").lower()))):
+                return u.get("discoveryUrlId")
+    
     return None
 
 def fetch_user_js(disc_id: str) -> dict:
@@ -222,6 +303,9 @@ def flatten_teaching(act: dict, user_obj_id: str) -> dict:
 
 # ---- MAIN ---------------------------------------------------------------
 def main():
+    # Only search for Terrence Shaneyfelt
+    faculty_fullnames = ["Terrence Shaneyfelt"]
+    
     with open(PROFILES_CSV,     "w", newline="", encoding="utf-8") as pf, \
          open(PUBLICATIONS_CSV, "w", newline="", encoding="utf-8") as pbf, \
          open(GRANTS_CSV,       "w", newline="", encoding="utf-8") as gf, \
