@@ -12,21 +12,25 @@ import csv
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Dict, Any
+from datetime import datetime
 
 # —— CONFIG —— 
 DEPARTMENT = "Med - Preventive Medicine"  # substring to match
 MAX_ID     = 6000                         # upper bound on numeric user IDs
 WORKERS    = 20                           # number of threads to use
 
+# Add timestamp to filenames
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+
 API_USER   = "https://scholars.uab.edu/api/users/{}"
-OUTPUT_CSV = "users_by_department.csv"
+OUTPUT_CSV = f"users_by_department_{TIMESTAMP}.csv"
 
 FIELDNAMES = [
     "objectId",
     "firstName",
     "lastName",
     "email",
-    "departments",
+    "department",  # Changed from departments to match other scripts
     "positions"
 ]
 
@@ -64,7 +68,7 @@ def fetch_and_filter(uid: int) -> Optional[Dict[str, Any]]:
             "firstName":   js.get("firstName", ""),
             "lastName":    js.get("lastName", ""),
             "email":       js.get("emailAddress", {}).get("address", ""),
-            "departments": "; ".join(depts),
+            "department":  "; ".join(depts),  # Changed from departments to match other scripts
             "positions":   "; ".join(titles),
         }
     except Exception:
