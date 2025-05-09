@@ -7,10 +7,10 @@ then pull full profile, publications, grants, and teaching activities.
 Clean bio, research interests, and teaching summary of unusual characters.
 
 Outputs four CSVs:
-- profiles.csv
-- publications.csv
-- grants.csv
-- teaching_activities.csv
+- profiles_YYYYMMDD_HHMMSS.csv
+- publications_YYYYMMDD_HHMMSS.csv
+- grants_YYYYMMDD_HHMMSS.csv
+- teaching_activities_YYYYMMDD_HHMMSS.csv
 """
 
 import csv
@@ -18,6 +18,7 @@ import requests
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
+from datetime import datetime
 
 # —— CONFIG —— 
 DEPARTMENT        = "Med - Preventive Medicine"  # substring to match
@@ -26,6 +27,9 @@ SCAN_WORKERS      = 20                           # threads for ID scanning
 FETCH_WORKERS     = 10                           # threads for data fetching
 SEARCH_PAGE_SIZE  = 500                          # page size for linkedTo calls
 PAUSE_SECONDS     = 0.1                          # delay between paged calls
+
+# Add timestamp to filenames
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 API_USER_DETAIL   = "https://scholars.uab.edu/api/users/{}"
 API_PUBS          = "https://scholars.uab.edu/api/publications/linkedTo"
@@ -39,15 +43,15 @@ HEADERS = {
 }
 
 # —— OUTPUT FILES —— 
-PROFILES_CSV     = "profiles.csv"
-PUBLICATIONS_CSV = "publications.csv"
-GRANTS_CSV       = "grants.csv"
-TEACHING_CSV     = "teaching_activities.csv"
+PROFILES_CSV     = f"profiles_{TIMESTAMP}.csv"
+PUBLICATIONS_CSV = f"publications_{TIMESTAMP}.csv"
+GRANTS_CSV       = f"grants_{TIMESTAMP}.csv"
+TEACHING_CSV     = f"teaching_activities_{TIMESTAMP}.csv"
 
 # —— CSV FIELDNAMES —— 
 PROFILE_FIELDS = [
     "objectId","discoveryUrlId","firstName","lastName",
-    "email","orcid","departments","positions",
+    "email","orcid","department","positions",
     "bio","researchInterests","teachingSummary"
 ]
 PUB_FIELDS = [
@@ -78,8 +82,8 @@ def clean_text(s: str) -> str:
     # replace en/em dashes and curly quotes
     subs = [
         ("\u2013", "-"), ("\u2014", "-"),
-        ("“", '"'), ("”", '"'),
-        ("‘", "'"), ("’", "'"),
+        ("\"", '"'), ("\"", '"'),
+        ("'", "'"), ("'", "'"),
     ]
     for orig, repl in subs:
         t = t.replace(orig, repl)
@@ -137,7 +141,7 @@ def extract_profile(js: Dict[str, Any]) -> Dict[str, Any]:
         "lastName":          js.get("lastName", ""),
         "email":             email,
         "orcid":             orcid,
-        "departments":       "; ".join(sorted(set(depts))),
+        "department":        "; ".join(sorted(set(depts))),
         "positions":         "; ".join(sorted(set(titles))),
         "bio":               bio_clean,
         "researchInterests": "; ".join(research),
@@ -173,7 +177,7 @@ def flatten_pub(pub: Dict[str, Any], uid: str) -> Dict[str, Any]:
     return {
         "userObjectId":        uid,
         "publicationObjectId": pub.get("objectId", ""),
-        "title":               pub.get("title", ""),
+        "title":               clean_text(pub.get("title", "")),
         "journal":             pub.get("journal", ""),
         "doi":                 pub.get("doi", ""),
         "pubYear":             pd.get("year", ""),
@@ -194,7 +198,7 @@ def flatten_gr(gr: Dict[str, Any], uid: str) -> Dict[str, Any]:
     return {
         "userObjectId":  uid,
         "grantObjectId": gr.get("objectId", ""),
-        "title":         gr.get("title", ""),
+        "title":         clean_text(gr.get("title", "")),
         "funder":        gr.get("funderName", ""),
         "awardType":     gr.get("objectTypeDisplayName", ""),
         "year":          d.get("year", ""),
@@ -217,7 +221,7 @@ def flatten_teach(act: Dict[str, Any], uid: str) -> Dict[str, Any]:
         "endYear":                  d2.get("year", ""),
         "endMonth":                 d2.get("month", ""),
         "endDay":                   d2.get("day", ""),
-        "title":                    act.get("title", ""),
+        "title":                    clean_text(act.get("title", "")),
     }
 
 def process_user(disc_id: str) -> Dict[str, Any]:
@@ -267,39 +271,77 @@ def process_user(disc_id: str) -> Dict[str, Any]:
         )
     ]
 
-    return {"profile": prof, "publications": pubs, "grants": grants, "teaching": teaching}
+    return {
+        "profile": prof,
+        "publications": pubs,
+        "grants": grants,
+        "teaching": teaching
+    }
 
 def main():
     # Phase 1: scan IDs to find matching discoveryUrlIds
-    with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as scan_pool:
-        scan_futs = [scan_pool.submit(scan_match_ids, uid) for uid in range(1, MAX_ID+1)]
-        disc_ids = {fut.result() for fut in as_completed(scan_futs) if fut.result()}
+    print(f"Scanning IDs 1..{MAX_ID} for {DEPARTMENT}...")
+    with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
+        futures = {pool.submit(scan_match_ids, uid): uid for uid in range(1, MAX_ID+1)}
+        disc_ids = []
+        for fut in as_completed(futures):
+            disc_id = fut.result()
+            if disc_id:
+                disc_ids.append(disc_id)
+                print(f"Found {disc_id}")
 
-    # Prepare CSV writers
-    with open(PROFILES_CSV,     "w", newline="", encoding="utf-8") as pf, \
-         open(PUBLICATIONS_CSV, "w", newline="", encoding="utf-8") as pbf, \
-         open(GRANTS_CSV,       "w", newline="", encoding="utf-8") as gf, \
-         open(TEACHING_CSV,     "w", newline="", encoding="utf-8") as tf:
+    if not disc_ids:
+        print("No matching users found.")
+        return
 
-        w_prof  = csv.DictWriter(pf, fieldnames=PROFILE_FIELDS);     w_prof.writeheader()
-        w_pub   = csv.DictWriter(pbf, fieldnames=PUB_FIELDS);        w_pub.writeheader()
-        w_gr    = csv.DictWriter(gf, fieldnames=GRANT_FIELDS);       w_gr.writeheader()
-        w_teach = csv.DictWriter(tf, fieldnames=TEACH_FIELDS);       w_teach.writeheader()
+    print(f"\nFound {len(disc_ids)} users. Fetching full data...")
 
-        # Phase 2: fetch and write data for each user
-        with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as fetch_pool:
-            fetch_futs = {fetch_pool.submit(process_user, did): did for did in disc_ids}
-            for fut in as_completed(fetch_futs):
+    # Phase 2: fetch and flatten all data
+    all_data = []
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+        futures = {pool.submit(process_user, disc_id): disc_id for disc_id in disc_ids}
+        for fut in as_completed(futures):
+            try:
                 data = fut.result()
-                w_prof.writerow(data["profile"])
-                for row in data["publications"]:
-                    w_pub.writerow(row)
-                for row in data["grants"]:
-                    w_gr.writerow(row)
-                for row in data["teaching"]:
-                    w_teach.writerow(row)
+                all_data.append(data)
+                print(f"✓ {data['profile']['lastName']}, {data['profile']['firstName']}")
+            except Exception as e:
+                print(f"✗ Error processing {fut.disc_id}: {e}")
 
-    print(f"✔ Done! Scanned {MAX_ID} IDs, found {len(disc_ids)} users, wrote CSVs.")
+    # Phase 3: write CSVs
+    print("\nWriting CSVs...")
+
+    # profiles
+    with open(PROFILES_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=PROFILE_FIELDS)
+        writer.writeheader()
+        for data in all_data:
+            writer.writerow(data["profile"])
+    print(f"Wrote {PROFILES_CSV}")
+
+    # publications
+    with open(PUBLICATIONS_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=PUB_FIELDS)
+        writer.writeheader()
+        for data in all_data:
+            writer.writerows(data["publications"])
+    print(f"Wrote {PUBLICATIONS_CSV}")
+
+    # grants
+    with open(GRANTS_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=GRANT_FIELDS)
+        writer.writeheader()
+        for data in all_data:
+            writer.writerows(data["grants"])
+    print(f"Wrote {GRANTS_CSV}")
+
+    # teaching activities
+    with open(TEACHING_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=TEACH_FIELDS)
+        writer.writeheader()
+        for data in all_data:
+            writer.writerows(data["teaching"])
+    print(f"Wrote {TEACHING_CSV}")
 
 if __name__ == "__main__":
     main()

@@ -1,183 +1,195 @@
 # UAB Scholars API Data Puller
 
-This collection of Python scripts automates the process of pulling faculty data from the UAB Scholars API. You can:
+A collection of Python scripts to pull data from the Scholars@UAB API.
 
-- Pull full profiles (bio, roles, contact, research interests, teaching summary)  
-- Export publications, grants and teaching activities  
-- Search by a list of faculty names  
-- Search by department (concurrent and non-concurrent)  
-- Pull a single user's complete profile and write separate CSVs  
+## Overview
 
-All outputs are CSV files with timestamps in the filenames (YYYYMMDD_HHMMSS format) so you can maintain historical data and load them into Excel, a database or your favorite analysis tool.
+These scripts provide various ways to pull faculty data from the Scholars@UAB API:
 
----
+1. `pull_master_scholars_by_faculty_list.py`: Pull complete profiles, publications, grants, and teaching activities for a list of faculty by name
+2. `pull_scholar_profile_by_user_csvs.py`: Pull complete profile for a specific user by ID
+3. `search_by_department_concurrent.py`: Scan all user IDs concurrently and filter by department
+4. `pull_master_scholars_by_dept_concurrent.py`: Pull complete data for all faculty in a department
 
-## 📋 Requirements
+## Requirements
 
-- **Python 3.9+**  
-- **requests** library  
-- (Optional) **pandas** and **openpyxl** if you want Excel output  
-- Internet access to `scholars.uab.edu`
+- Python 3.6+
+- Required packages:
+  - requests
+  - concurrent.futures (built-in)
+  - csv (built-in)
+  - datetime (built-in)
+  - unicodedata (built-in)
 
----
+## Installation
 
-## 🛠 Installation
-
-1. Clone or download this repo  
-2. Create and activate a virtual environment  
+1. Clone this repository
+2. Create a virtual environment (recommended):
    ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```  
-3. Install dependencies  
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+3. Install dependencies:
    ```bash
-   pip install requests
-   # If you plan to export to Excel:
-   pip install pandas openpyxl
+   pip install -r requirements.txt
    ```
 
----
+## File Overview
 
-## 📂 File Overview
+### 1. pull_master_scholars_by_faculty_list.py
+- Pulls complete Scholars@UAB profiles, publications, grants, and teaching activities for a list of faculty by name
+- Outputs four CSV files with timestamps:
+  - `profiles_YYYYMMDD_HHMMSS.csv`
+  - `publications_YYYYMMDD_HHMMSS.csv`
+  - `grants_YYYYMMDD_HHMMSS.csv`
+  - `teaching_activities_YYYYMMDD_HHMMSS.csv`
+- Features:
+  - Handles name variations (nicknames, hyphenated names, Jr./Sr.)
+  - Cleans text data (normalizes unicode, replaces fancy punctuation)
+  - Includes research interests and teaching summaries
 
-- **faculty_fullnames.py**  
-  A Python file exporting `faculty_fullnames`, a list of full names (First [M.] Last).
+### 2. pull_scholar_profile_by_user_csvs.py
+- Pulls complete profile for a specific user by ID
+- Outputs four CSV files with timestamps:
+  - `profiles_YYYYMMDD_HHMMSS.csv`
+  - `publications_YYYYMMDD_HHMMSS.csv`
+  - `grants_YYYYMMDD_HHMMSS.csv`
+  - `teaching_activities_YYYYMMDD_HHMMSS.csv`
+- Features:
+  - Cleans text data
+  - Includes research interests and teaching summaries
 
-- **pull_master_scholars_by_faculty_list.py**  
-  Pulls profiles, publications, grants and teaching activities for each name in `faculty_fullnames.py`.  
-  Features:
-  - Cleans mojibake and curly quotes/dashes
-  - Handles name variations (e.g., Jim → James, Alex → Alexander)
-  - Supports hyphenated names and Jr./Sr. suffixes
-  - Generates timestamped output files
-  - Can be modified to search for a single faculty member
+### 3. search_by_department_concurrent.py
+- Scans all user IDs concurrently and filters by department
+- Outputs a single CSV file with timestamp:
+  - `users_by_department_YYYYMMDD_HHMMSS.csv`
+- Features:
+  - Uses ThreadPoolExecutor for concurrent scanning
+  - Sorts results by last name, first name
 
-- **pull_master_scholars_by_dept_concurrent.py**  
-  Two-phase concurrent scanner:  
-  1. Scan numeric IDs up to `MAX_ID` in parallel, find matching department  
-  2. Fetch each user's profile, publications, grants and teaching activities in parallel  
-  Outputs four timestamped CSVs.
+### 4. pull_master_scholars_by_dept_concurrent.py
+- Pulls complete data for all faculty in a department
+- Outputs four CSV files with timestamps:
+  - `profiles_YYYYMMDD_HHMMSS.csv`
+  - `publications_YYYYMMDD_HHMMSS.csv`
+  - `grants_YYYYMMDD_HHMMSS.csv`
+  - `teaching_activities_YYYYMMDD_HHMMSS.csv`
+- Features:
+  - Uses ThreadPoolExecutor for concurrent scanning and data fetching
+  - Cleans text data
+  - Includes research interests and teaching summaries
 
-- **search_by_department_concurrent.py**  
-  Query the API search endpoint in parallel to find every user whose `positions.department` contains your department substring. Writes a single CSV of `objectId`, name, email, departments and positions.
+## Configuration
 
-- **pull_scholar_profile_by_user_csvs.py**  
-  Given a single numeric `USER_ID`, fetches that user's profile, research interests, teaching summary, publications and grants. Cleans all text fields and writes three separate timestamped CSVs:  
-  - `<slug>_profile.csv`  
-  - `<slug>_publications.csv`  
-  - `<slug>_grants.csv`
+Each script has configurable parameters at the top:
 
----
+- `DEPARTMENT`: Department name to search for (in department scripts)
+- `MAX_ID`: Upper bound on numeric user IDs to scan
+- `WORKERS`: Number of threads to use for concurrent operations
+- `PER_PAGE_*`: Page size for API calls
+- `PAUSE`: Delay between API calls
 
-## ⚙️ Configuration
+## Usage
 
-Each script has a "CONFIG" section at the top where you can adjust:
+1. Pull data for a list of faculty:
+   ```bash
+   python pull_master_scholars_by_faculty_list.py
+   ```
 
-- **DEPARTMENT** – substring used for department searches  
-- **MAX_ID** – upper bound on numeric user IDs (for ID scanners)  
-- **PER_PAGE_PUBS**, **PER_PAGE_GRANTS**, **PER_PAGE_TEACHING** – pagination sizes  
-- **PAUSE**, **PAUSE_SECONDS** – delay between requests to avoid rate limiting  
+2. Pull data for a specific user:
+   ```bash
+   python pull_scholar_profile_by_user_csvs.py
+   ```
 
-Example in `pull_master_scholars_by_dept_concurrent.py`:
+3. Search by department:
+   ```bash
+   python search_by_department_concurrent.py
+   ```
 
-```python
-DEPARTMENT     = "Med - Preventive Medicine"
-MAX_ID         = 6000
-SCAN_WORKERS   = 20
-FETCH_WORKERS  = 10
-PAUSE_SECONDS  = 0.1
-```
+4. Pull all data for a department:
+   ```bash
+   python pull_master_scholars_by_dept_concurrent.py
+   ```
 
----
+## Output Files
 
-## 🚀 Usage
+All scripts generate CSV files with consistent field names and timestamps:
 
-Activate your virtual environment:
+### Profiles CSV Fields
+- objectId
+- discoveryUrlId (where applicable)
+- firstName
+- lastName
+- email
+- orcid
+- department
+- positions
+- bio
+- researchInterests
+- teachingSummary
 
-```bash
-source venv/bin/activate
-```
+### Publications CSV Fields
+- userObjectId
+- publicationObjectId
+- title
+- journal
+- doi
+- pubYear
+- pubMonth
+- pubDay
+- volume
+- issue
+- pages
+- issn
+- labels
+- authors
 
-### 1. Pull a fixed list of faculty
+### Grants CSV Fields
+- userObjectId
+- grantObjectId
+- title
+- funder
+- awardType
+- year
+- month
+- day
+- labels
 
-```bash
-python pull_master_scholars_by_faculty_list.py
-```
+### Teaching Activities CSV Fields
+- userObjectId
+- teachingActivityObjectId
+- type
+- startYear
+- startMonth
+- startDay
+- endYear
+- endMonth
+- endDay
+- title
 
-Produces four timestamped CSVs:
+## Troubleshooting
 
-- `profiles_YYYYMMDD_HHMMSS.csv`  
-- `publications_YYYYMMDD_HHMMSS.csv`  
-- `grants_YYYYMMDD_HHMMSS.csv`  
-- `teaching_activities_YYYYMMDD_HHMMSS.csv`
+1. Empty CSVs:
+   - Check if the faculty list or department name is correct
+   - Verify API access and rate limits
+   - Check for network connectivity
 
-### 2. Search by department (concurrent)
+2. Name Matching Issues:
+   - The scripts handle various name formats (nicknames, hyphenated names, Jr./Sr.)
+   - If a faculty member is not found, try their full name or alternative name format
 
-```bash
-python pull_master_scholars_by_dept_concurrent.py
-```
+3. API Rate Limits:
+   - The scripts include built-in delays between API calls
+   - Adjust the `PAUSE` parameter if needed
 
-Produces four timestamped CSVs for every user whose department matches:
+## Contributing
 
-- `profiles_YYYYMMDD_HHMMSS.csv`  
-- `publications_YYYYMMDD_HHMMSS.csv`  
-- `grants_YYYYMMDD_HHMMSS.csv`  
-- `teaching_activities_YYYYMMDD_HHMMSS.csv`
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
-### 3. Search by department only (basic)
+## License
 
-```bash
-python search_by_department_concurrent.py
-```
-
-Produces:
-
-- `users_by_department_YYYYMMDD_HHMMSS.csv`  
-  with `objectId`, first and last name, email, departments and positions.
-
-### 4. Pull a single user's profile, pubs and grants
-
-```bash
-python pull_scholar_profile_by_user_csvs.py
-```
-
-Produces three timestamped files for the specified `USER_ID`:
-
-- `<slug>_profile_YYYYMMDD_HHMMSS.csv`  
-- `<slug>_publications_YYYYMMDD_HHMMSS.csv`  
-- `<slug>_grants_YYYYMMDD_HHMMSS.csv`
-
----
-
-## 🛠 Troubleshooting
-
-- **Empty CSVs**  
-  - Verify your department substring matches the API's `department` fields (case-insensitive).  
-  - Increase `PAUSE` or `PAUSE_SECONDS` if you suspect rate limiting.
-
-- **Name Matching Issues**
-  - The script includes intelligent name matching for common variations:
-    - Nicknames (Jim → James, Alex → Alexander)
-    - Hyphenated names (Allen-Watts → Allen Watts)
-    - Jr./Sr. suffixes
-    - Middle initials
-  - If a name isn't found, try adjusting the name format in `faculty_fullnames.py`
-
-- **Unicode or mojibake issues**  
-  - All scripts include a `clean_text` function to normalize Unicode, replace `‚Äì` and convert curly quotes/dashes to plain ASCII.
-
-- **Connection errors**  
-  - Ensure you have internet access and the API is reachable.  
-  - Increase timeouts or pause delays.
-
----
-
-## ❤️ Contributing
-
-Contributions are welcome. Feel free to open issues or submit pull requests.
-
----
-
-## 📄 License
-
-This project is released under the MIT License.
+This project is licensed under the MIT License - see the LICENSE file for details.
