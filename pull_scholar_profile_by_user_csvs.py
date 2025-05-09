@@ -12,6 +12,7 @@ import csv
 import time
 import requests
 import unicodedata
+from datetime import datetime
 
 # ---- CONFIG --------------------------------------------------------------
 USER_ID           = 3048                       # numeric user ID
@@ -19,6 +20,9 @@ PER_PAGE_PUBS     = 25                         # publications per page
 PER_PAGE_GRANTS   = 25                         # grants per page
 PER_PAGE_TEACHING = 25                         # teaching activities per page
 PAUSE             = 0.1                        # seconds between page fetches
+
+# Add timestamp to filenames
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 USERS_API_BASE    = "https://scholars.uab.edu/api/users/{}"
 PUBS_API_URL      = "https://scholars.uab.edu/api/publications/linkedTo"
@@ -40,8 +44,8 @@ def clean_text(s: str) -> str:
     t = t.replace("‚Äì", "-")
     for orig, repl in [
         ("\u2013", "-"), ("\u2014", "-"),
-        ("“", '"'), ("”", '"'),
-        ("‘", "'"), ("’", "'"),
+        (""", '"'), (""", '"'),
+        ("'", "'"), ("'", "'"),
     ]:
         t = t.replace(orig, repl)
     return " ".join(t.split())
@@ -87,8 +91,8 @@ def extract_profile(js: dict) -> dict:
 
     return {
         "objectId":          js.get("objectId", ""),
-        "first":             js.get("firstName", ""),
-        "last":              js.get("lastName", ""),
+        "firstName":         js.get("firstName", ""),
+        "lastName":          js.get("lastName", ""),
         "email":             email,
         "orcid":             orcid,
         "department":        "; ".join(sorted(set(depts))),
@@ -177,7 +181,7 @@ def main():
     js = fetch_user_js(USER_ID)
     slug = js.get("discoveryUrlId", str(USER_ID))
     profile = extract_profile(js)
-    prof_file = f"{slug}_profile.csv"
+    prof_file = f"profiles_{TIMESTAMP}.csv"
     with open(prof_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(profile.keys()))
         writer.writeheader()
@@ -187,7 +191,7 @@ def main():
     user_obj_id = profile["objectId"]
 
     # 2) Publications
-    pubs_file = f"{slug}_publications.csv"
+    pubs_file = f"publications_{TIMESTAMP}.csv"
     sample_pub = flatten_publication({}, user_obj_id)
     with open(pubs_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(sample_pub.keys()))
@@ -208,7 +212,7 @@ def main():
     print(f"Wrote publications to {pubs_file}")
 
     # 3) Grants
-    grants_file = f"{slug}_grants.csv"
+    grants_file = f"grants_{TIMESTAMP}.csv"
     sample_gr = flatten_grant({}, user_obj_id)
     with open(grants_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(sample_gr.keys()))
@@ -227,7 +231,7 @@ def main():
     print(f"Wrote grants to {grants_file}")
 
     # 4) Teaching Activities
-    teach_file = f"{slug}_teaching_activities.csv"
+    teach_file = f"teaching_activities_{TIMESTAMP}.csv"
     sample_teach = flatten_teaching({}, user_obj_id)
     with open(teach_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(sample_teach.keys()))
