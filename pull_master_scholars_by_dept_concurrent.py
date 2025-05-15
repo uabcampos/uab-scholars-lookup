@@ -39,7 +39,7 @@ API_TEACHING      = "https://scholars.uab.edu/api/teachingActivities/linkedTo"
 HEADERS = {
     "Accept":       "application/json, text/html, */*",
     "Content-Type": "application/json",
-    "User-Agent":   "Mozilla/5.0"
+    "User-Agent":   "UAB-Scholars-Tool/1.0"
 }
 
 # —— OUTPUT FILES —— 
@@ -50,23 +50,23 @@ TEACHING_CSV     = f"teaching_activities_{TIMESTAMP}.csv"
 
 # —— CSV FIELDNAMES —— 
 PROFILE_FIELDS = [
-    "objectId","discoveryUrlId","firstName","lastName",
-    "email","orcid","department","positions",
-    "bio","researchInterests","teachingSummary"
+    "objectId", "discoveryUrlId", "firstName", "lastName",
+    "email", "orcid", "department", "positions",
+    "bio", "researchInterests", "teachingSummary"
 ]
 PUB_FIELDS = [
-    "userObjectId","publicationObjectId","title","journal","doi",
-    "pubYear","pubMonth","pubDay","volume","issue","pages","issn",
-    "labels","authors"
+    "userObjectId", "publicationObjectId", "title", "journal", "doi",
+    "pubYear", "pubMonth", "pubDay", "volume", "issue", "pages", "issn",
+    "labels", "authors", "url"
 ]
 GRANT_FIELDS = [
-    "userObjectId","grantObjectId","title","funder",
-    "awardType","year","month","day","labels"
+    "userObjectId", "grantObjectId", "title", "funder",
+    "awardType", "year", "month", "day", "labels", "url"
 ]
 TEACH_FIELDS = [
-    "userObjectId","teachingActivityObjectId","type",
-    "startYear","startMonth","startDay",
-    "endYear","endMonth","endDay","title"
+    "userObjectId", "teachingActivityObjectId", "type",
+    "startYear", "startMonth", "startDay",
+    "endYear", "endMonth", "endDay", "title", "url"
 ]
 
 session = requests.Session()
@@ -82,7 +82,7 @@ def clean_text(s: str) -> str:
     # replace en/em dashes and curly quotes
     subs = [
         ("\u2013", "-"), ("\u2014", "-"),
-        ("\"", '"'), ("\"", '"'),
+        (""", '"'), (""", '"'),
         ("'", "'"), ("'", "'"),
     ]
     for orig, repl in subs:
@@ -103,8 +103,9 @@ def scan_match_ids(uid: int) -> Optional[str]:
         for p in js.get("positions", []):
             if DEPARTMENT.lower() in (p.get("department","") or "").lower():
                 return js.get("discoveryUrlId")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error fetching user {uid}: {str(e)}")
+        return None
     return None
 
 def extract_profile(js: Dict[str, Any]) -> Dict[str, Any]:
@@ -155,18 +156,22 @@ def fetch_pages(endpoint: str, payload_fn, per_page: int):
     """
     start = 0
     while True:
-        payload = payload_fn(start)
-        r = session.post(endpoint, json=payload, headers=HEADERS, timeout=30)
-        r.raise_for_status()
-        blob = r.json()
-        items = blob.get("items") or blob.get("resource") or []
-        if not items:
-            return
-        for it in items:
-            yield it
-        total = blob.get("pagination", {}).get("total", 0)
-        start += per_page
-        if start >= total:
+        try:
+            payload = payload_fn(start)
+            r = session.post(endpoint, json=payload, headers=HEADERS, timeout=30)
+            r.raise_for_status()
+            blob = r.json()
+            items = blob.get("items") or blob.get("resource") or []
+            if not items:
+                return
+            for it in items:
+                yield it
+            total = blob.get("pagination", {}).get("total", 0)
+            start += per_page
+            if start >= total:
+                return
+        except Exception as e:
+            print(f"Error fetching page {start} from {endpoint}: {str(e)}")
             return
 
 def flatten_pub(pub: Dict[str, Any], uid: str) -> Dict[str, Any]:
@@ -189,6 +194,7 @@ def flatten_pub(pub: Dict[str, Any], uid: str) -> Dict[str, Any]:
         "issn":                pub.get("issn", ""),
         "labels":              labels,
         "authors":             authors,
+        "url":                 pub.get("url", ""),
     }
 
 def flatten_gr(gr: Dict[str, Any], uid: str) -> Dict[str, Any]:
@@ -205,6 +211,7 @@ def flatten_gr(gr: Dict[str, Any], uid: str) -> Dict[str, Any]:
         "month":         d.get("month", ""),
         "day":           d.get("day", ""),
         "labels":        labels,
+        "url":           gr.get("url", ""),
     }
 
 def flatten_teach(act: Dict[str, Any], uid: str) -> Dict[str, Any]:
@@ -222,126 +229,122 @@ def flatten_teach(act: Dict[str, Any], uid: str) -> Dict[str, Any]:
         "endMonth":                 d2.get("month", ""),
         "endDay":                   d2.get("day", ""),
         "title":                    clean_text(act.get("title", "")),
+        "url":                      act.get("url", ""),
     }
 
 def process_user(disc_id: str) -> Dict[str, Any]:
     """Fetch detail and linked data for a single user, flatten all records."""
-    js = session.get(API_USER_DETAIL.format(disc_id), headers=HEADERS, timeout=15).json()
-    prof = extract_profile(js)
-    uid = prof["objectId"]
+    try:
+        js = session.get(API_USER_DETAIL.format(disc_id), headers=HEADERS, timeout=15).json()
+        prof = extract_profile(js)
+        uid = prof["objectId"]
 
-    pubs = [
-        flatten_pub(p, uid)
-        for p in fetch_pages(
-            API_PUBS,
-            lambda s: {
-                "objectId":      disc_id,
-                "objectType":    "user",
-                "pagination":    {"perPage": SEARCH_PAGE_SIZE, "startFrom": s},
-                "favouritesFirst": True,
-                "sort":          "dateDesc"
-            },
-            SEARCH_PAGE_SIZE
-        )
-    ]
+        pubs = [
+            flatten_pub(p, uid)
+            for p in fetch_pages(
+                API_PUBS,
+                lambda s: {
+                    "objectId":      disc_id,
+                    "objectType":    "user",
+                    "pagination":    {"perPage": SEARCH_PAGE_SIZE, "startFrom": s},
+                    "favouritesFirst": True,
+                    "sort":          "dateDesc"
+                },
+                SEARCH_PAGE_SIZE
+            )
+        ]
 
-    grants = [
-        flatten_gr(g, uid)
-        for g in fetch_pages(
-            API_GRANTS,
-            lambda s: {
-                "objectId":   disc_id,
-                "objectType": "user",
-                "pagination": {"perPage": SEARCH_PAGE_SIZE, "startFrom": s}
-            },
-            SEARCH_PAGE_SIZE
-        )
-    ]
+        grants = [
+            flatten_gr(g, uid)
+            for g in fetch_pages(
+                API_GRANTS,
+                lambda s: {
+                    "objectId":   disc_id,
+                    "objectType": "user",
+                    "pagination": {"perPage": SEARCH_PAGE_SIZE, "startFrom": s}
+                },
+                SEARCH_PAGE_SIZE
+            )
+        ]
 
-    teaching = [
-        flatten_teach(t, uid)
-        for t in fetch_pages(
-            API_TEACHING,
-            lambda s: {
-                "objectId":   disc_id,
-                "objectType": "user",
-                "pagination": {"perPage": SEARCH_PAGE_SIZE, "startFrom": s}
-            },
-            SEARCH_PAGE_SIZE
-        )
-    ]
+        teaching = [
+            flatten_teach(t, uid)
+            for t in fetch_pages(
+                API_TEACHING,
+                lambda s: {
+                    "objectId":   disc_id,
+                    "objectType": "user",
+                    "pagination": {"perPage": SEARCH_PAGE_SIZE, "startFrom": s}
+                },
+                SEARCH_PAGE_SIZE
+            )
+        ]
 
-    return {
-        "profile": prof,
-        "publications": pubs,
-        "grants": grants,
-        "teaching": teaching
-    }
+        return {
+            "profile": prof,
+            "publications": pubs,
+            "grants": grants,
+            "teaching": teaching
+        }
+    except Exception as e:
+        print(f"Error processing user {disc_id}: {str(e)}")
+        return None
 
 def main():
     # Phase 1: scan IDs to find matching discoveryUrlIds
     print(f"Scanning IDs 1..{MAX_ID} for {DEPARTMENT}...")
+    matching_ids = []
     with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
         futures = {pool.submit(scan_match_ids, uid): uid for uid in range(1, MAX_ID+1)}
-        disc_ids = []
         for fut in as_completed(futures):
             disc_id = fut.result()
             if disc_id:
-                disc_ids.append(disc_id)
-                print(f"Found {disc_id}")
+                matching_ids.append(disc_id)
 
-    if not disc_ids:
-        print("No matching users found.")
-        return
+    print(f"Found {len(matching_ids)} matching users. Fetching full profiles...")
 
-    print(f"\nFound {len(disc_ids)} users. Fetching full data...")
+    # Phase 2: fetch full profiles and linked data
+    all_profiles = []
+    all_pubs = []
+    all_grants = []
+    all_teaching = []
 
-    # Phase 2: fetch and flatten all data
-    all_data = []
     with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
-        futures = {pool.submit(process_user, disc_id): disc_id for disc_id in disc_ids}
+        futures = {pool.submit(process_user, disc_id): disc_id for disc_id in matching_ids}
         for fut in as_completed(futures):
-            try:
-                data = fut.result()
-                all_data.append(data)
-                print(f"✓ {data['profile']['lastName']}, {data['profile']['firstName']}")
-            except Exception as e:
-                print(f"✗ Error processing {fut.disc_id}: {e}")
+            result = fut.result()
+            if result:
+                all_profiles.append(result["profile"])
+                all_pubs.extend(result["publications"])
+                all_grants.extend(result["grants"])
+                all_teaching.extend(result["teaching"])
 
-    # Phase 3: write CSVs
-    print("\nWriting CSVs...")
-
-    # profiles
+    # Write CSVs
+    print(f"Writing {len(all_profiles)} profiles...")
     with open(PROFILES_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=PROFILE_FIELDS)
         writer.writeheader()
-        for data in all_data:
-            writer.writerow(data["profile"])
-    print(f"Wrote {PROFILES_CSV}")
+        writer.writerows(all_profiles)
 
-    # publications
+    print(f"Writing {len(all_pubs)} publications...")
     with open(PUBLICATIONS_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=PUB_FIELDS)
         writer.writeheader()
-        for data in all_data:
-            writer.writerows(data["publications"])
-    print(f"Wrote {PUBLICATIONS_CSV}")
+        writer.writerows(all_pubs)
 
-    # grants
+    print(f"Writing {len(all_grants)} grants...")
     with open(GRANTS_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=GRANT_FIELDS)
         writer.writeheader()
-        for data in all_data:
-            writer.writerows(data["grants"])
-    print(f"Wrote {GRANTS_CSV}")
+        writer.writerows(all_grants)
 
-    # teaching activities
+    print(f"Writing {len(all_teaching)} teaching activities...")
     with open(TEACHING_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=TEACH_FIELDS)
         writer.writeheader()
-        for data in all_data:
-            writer.writerows(data["teaching"])
-    print(f"Wrote {TEACHING_CSV}")
+        writer.writerows(all_teaching)
+
+    print("Done!")
 
 if __name__ == "__main__":
     main()

@@ -13,12 +13,13 @@ import time
 import requests
 import unicodedata
 from datetime import datetime
+from typing import Dict, Any, List, Optional
 
 # ---- CONFIG --------------------------------------------------------------
-USER_ID           = 3048                       # numeric user ID
-PER_PAGE_PUBS     = 25                         # publications per page
-PER_PAGE_GRANTS   = 25                         # grants per page
-PER_PAGE_TEACHING = 25                         # teaching activities per page
+USER_ID           = 19766                        # numeric user ID (Kelly Palmer)
+PER_PAGE_PUBS     = 500                         # publications per page
+PER_PAGE_GRANTS   = 500                         # grants per page
+PER_PAGE_TEACHING = 500                         # teaching activities per page
 PAUSE             = 0.1                        # seconds between page fetches
 
 # Add timestamp to filenames
@@ -30,7 +31,7 @@ GRANTS_API_URL    = "https://scholars.uab.edu/api/grants/linkedTo"
 TEACH_API_URL     = "https://scholars.uab.edu/api/teachingActivities/linkedTo"
 
 HEADERS = {
-    "User-Agent":   "UAB-Profile-Scraper/1.2 (ccampos@uab.edu)",
+    "User-Agent":   "UAB-Scholars-Tool/1.0",
     "Accept":       "application/json",
     "Content-Type": "application/json",
 }
@@ -51,24 +52,28 @@ def clean_text(s: str) -> str:
     return " ".join(t.split())
 
 # ---- FETCH FUNCTIONS -----------------------------------------------------
-def fetch_user_js(uid: int) -> dict:
+def fetch_user_js(uid: int) -> Optional[Dict[str, Any]]:
     """Fetch user JSON profile by numeric ID."""
-    resp = requests.get(USERS_API_BASE.format(uid), headers=HEADERS, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.get(USERS_API_BASE.format(uid), headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"Error fetching user {uid}: {str(e)}")
+        return None
 
 # ---- PROFILE EXTRACTION --------------------------------------------------
-def extract_profile(js: dict) -> dict:
+def extract_profile(js: Dict[str, Any]) -> Dict[str, Any]:
     """Extract and clean core profile fields, including research and teaching."""
     email = js.get("emailAddress", {}).get("address", "")
     orcid = js.get("orcid", "") or ""
 
     # departments and positions
-    depts = [p.get("department","") for p in js.get("positions",[]) if p.get("department")]
-    titles = [p.get("position","")   for p in js.get("positions",[]) if p.get("position")]
+    depts = [p.get("department","").strip() for p in js.get("positions",[]) if p.get("department")]
+    titles = [p.get("position","").strip() for p in js.get("positions",[]) if p.get("position")]
     for appt in js.get("institutionalAppointments", []):
         if appt.get("position"):
-            titles.append(appt["position"])
+            titles.append(appt["position"].strip())
 
     # clean bio
     bio_clean = clean_text(js.get("overview", "").replace("\n", " "))
@@ -91,6 +96,7 @@ def extract_profile(js: dict) -> dict:
 
     return {
         "objectId":          js.get("objectId", ""),
+        "discoveryUrlId":    js.get("discoveryUrlId", ""),
         "firstName":         js.get("firstName", ""),
         "lastName":          js.get("lastName", ""),
         "email":             email,
@@ -107,24 +113,29 @@ def fetch_all_pages(url: str, payload_fn, per_page: int):
     """Generic pager: yields lists of JSON items until exhausted."""
     start = 0
     while True:
-        payload = payload_fn(start)
-        resp = requests.post(url, json=payload, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        results = data.get("items") or data.get("resource") or []
-        if not results:
+        try:
+            payload = payload_fn(start)
+            resp = requests.post(url, json=payload, headers=HEADERS, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("items") or data.get("resource") or []
+            if not results:
+                break
+            yield results
+            total = data.get("pagination", {}).get("total", 0)
+            start += per_page
+            if start >= total:
+                break
+            time.sleep(PAUSE)
+        except Exception as e:
+            print(f"Error fetching page {start} from {url}: {str(e)}")
             break
-        yield results
-        total = data.get("pagination", {}).get("total", 0)
-        start += per_page
-        if start >= total:
-            break
-        time.sleep(PAUSE)
 
 # ---- FLATTEN HELPERS -----------------------------------------------------
-def flatten_publication(pub: dict, user_obj_id: str) -> dict:
+def flatten_publication(pub: Dict[str, Any], user_obj_id: str) -> Dict[str, Any]:
+    """Map publication JSON to flat CSV row."""
     authors = "; ".join(a.get("fullName","") for a in pub.get("authors",[]))
-    labels  = "; ".join(lbl.get("value","")   for lbl in pub.get("labels",[]))
+    labels  = "; ".join(l.get("value","") for l in pub.get("labels",[]))
     pd = pub.get("publicationDate", {})
     return {
         "userObjectId":        user_obj_id,
@@ -141,11 +152,13 @@ def flatten_publication(pub: dict, user_obj_id: str) -> dict:
         "issn":                pub.get("issn",""),
         "labels":              labels,
         "authors":             authors,
+        "url":                 pub.get("url",""),
     }
 
-def flatten_grant(gr: dict, user_obj_id: str) -> dict:
+def flatten_grant(gr: Dict[str, Any], user_obj_id: str) -> Dict[str, Any]:
+    """Map grant JSON to flat CSV row."""
     d = gr.get("date1", {})
-    labels = "; ".join(lbl.get("value","") for lbl in gr.get("labels",[]))
+    labels = "; ".join(l.get("value","") for l in gr.get("labels",[]))
     return {
         "userObjectId":  user_obj_id,
         "grantObjectId": gr.get("objectId",""),
@@ -156,9 +169,10 @@ def flatten_grant(gr: dict, user_obj_id: str) -> dict:
         "month":         d.get("month",""),
         "day":           d.get("day",""),
         "labels":        labels,
+        "url":           gr.get("url",""),
     }
 
-def flatten_teaching(act: dict, user_obj_id: str) -> dict:
+def flatten_teaching(act: Dict[str, Any], user_obj_id: str) -> Dict[str, Any]:
     """Flatten one teaching activity record to CSV row."""
     d1 = act.get("date1", {})
     d2 = act.get("date2", {})
@@ -173,12 +187,17 @@ def flatten_teaching(act: dict, user_obj_id: str) -> dict:
         "endMonth":                 d2.get("month",""),
         "endDay":                   d2.get("day",""),
         "title":                    clean_text(act.get("title","")),
+        "url":                      act.get("url",""),
     }
 
 # ---- MAIN ---------------------------------------------------------------
 def main():
     # 1) Profile
     js = fetch_user_js(USER_ID)
+    if not js:
+        print(f"Error: Could not fetch user {USER_ID}")
+        return
+
     slug = js.get("discoveryUrlId", str(USER_ID))
     profile = extract_profile(js)
     prof_file = f"profiles_{TIMESTAMP}.csv"

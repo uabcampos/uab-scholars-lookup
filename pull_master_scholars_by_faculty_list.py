@@ -22,6 +22,8 @@ import time
 import requests
 import unicodedata
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, Any, List, Optional
 
 from faculty_fullnames import faculty_fullnames
 
@@ -32,15 +34,16 @@ PUBS_API_URL         = f"{BASE_URL}/api/publications/linkedTo"
 GRANTS_API_URL       = f"{BASE_URL}/api/grants/linkedTo"
 TEACHING_API_URL     = f"{BASE_URL}/api/teachingActivities/linkedTo"
 
-PER_PAGE_PUBS        = 50
-PER_PAGE_GRANTS      = 50
-PER_PAGE_TEACHING    = 50
+PER_PAGE_PUBS        = 500
+PER_PAGE_GRANTS      = 500
+PER_PAGE_TEACHING    = 500
 PAUSE                = 0.1  # seconds between requests
+MAX_WORKERS          = 10   # number of concurrent workers
 
 API_HEADERS = {
     "Accept":       "application/json, text/html, */*",
     "Content-Type": "application/json",
-    "User-Agent":   "Mozilla/5.0"
+    "User-Agent":   "UAB-Scholars-Tool/1.0"
 }
 
 # Get current timestamp for filenames
@@ -53,23 +56,23 @@ GRANTS_CSV        = f"grants_{TIMESTAMP}.csv"
 TEACHING_CSV      = f"teaching_activities_{TIMESTAMP}.csv"
 
 PROFILE_FIELDS    = [
-    "objectId", "first", "last", "email", "orcid",
-    "department", "positions", "bio", "researchInterests", "teachingSummary"
+    "objectId", "discoveryUrlId", "firstName", "lastName",
+    "email", "orcid", "department", "positions",
+    "bio", "researchInterests", "teachingSummary"
 ]
 PUB_FIELDS        = [
     "userObjectId", "publicationObjectId", "title", "journal", "doi",
     "pubYear", "pubMonth", "pubDay", "volume", "issue", "pages", "issn",
-    "labels", "authors"
+    "labels", "authors", "url"
 ]
 GRANT_FIELDS      = [
     "userObjectId", "grantObjectId", "title", "funder",
-    "awardType", "year", "month", "day", "labels"
+    "awardType", "year", "month", "day", "labels", "url"
 ]
 TEACH_FIELDS      = [
     "userObjectId", "teachingActivityObjectId", "type",
     "startYear", "startMonth", "startDay",
-    "endYear", "endMonth", "endDay",
-    "title"
+    "endYear", "endMonth", "endDay", "title", "url"
 ]
 
 session = requests.Session()
@@ -160,52 +163,62 @@ def get_name_variations(full_name: str) -> list:
     
     return variations
 
-def find_disc_id(full_name: str) -> str:
+def find_disc_id(full_name: str) -> Optional[str]:
     """
     Try to find a user's discoveryUrlId using various name formats.
     """
     variations = get_name_variations(full_name)
     
     for first, last in variations:
-        payload = {"params": {"by": "text", "type": "user", "text": f"{first} {last}"}}
-        r = session.post(API_USERS, json=payload, headers=API_HEADERS, timeout=15)
-        r.raise_for_status()
-        
-        for u in r.json().get("resource", []):
-            # Check if either the exact match or a close match
-            if (u.get("firstName","").lower() == first.lower() and
-                u.get("lastName","").lower() == last.lower()):
-                return u.get("discoveryUrlId")
+        try:
+            payload = {"params": {"by": "text", "type": "user", "text": f"{first} {last}"}}
+            r = session.post(API_USERS, json=payload, headers=API_HEADERS, timeout=15)
+            r.raise_for_status()
             
-            # Also check if the last name matches and first name is a variation
-            if (u.get("lastName","").lower() == last.lower() and
-                (u.get("firstName","").lower().startswith(first.lower()) or
-                 first.lower().startswith(u.get("firstName","").lower()))):
-                return u.get("discoveryUrlId")
+            for u in r.json().get("resource", []):
+                # Check if either the exact match or a close match
+                if (u.get("firstName","").lower() == first.lower() and
+                    u.get("lastName","").lower() == last.lower()):
+                    return u.get("discoveryUrlId")
+                
+                # Also check if the last name matches and first name is a variation
+                if (u.get("lastName","").lower() == last.lower() and
+                    (u.get("firstName","").lower().startswith(first.lower()) or
+                     first.lower().startswith(u.get("firstName","").lower()))):
+                    return u.get("discoveryUrlId")
+        except Exception as e:
+            print(f"Error searching for {full_name}: {str(e)}")
+            continue
     
     return None
 
-def fetch_user_js(disc_id: str) -> dict:
-    r = session.get(f"{API_USERS}/{disc_id}", headers=API_HEADERS, timeout=15)
-    r.raise_for_status()
-    return r.json()
+def fetch_user_js(disc_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch user JSON profile by discoveryUrlId."""
+    try:
+        r = session.get(f"{API_USERS}/{disc_id}", headers=API_HEADERS, timeout=15)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        print(f"Error fetching user {disc_id}: {str(e)}")
+        return None
 
 # ---- PROFILE EXTRACTION --------------------------------------------------
-def extract_profile(js: dict) -> dict:
-    email = js.get("emailAddress",{}).get("address","")
-    orcid = js.get("orcid","")
-    depts = [p["department"] for p in js.get("positions",[]) if p.get("department")]
-    titles= [p["position"]   for p in js.get("positions",[]) if p.get("position")]
-    for appt in js.get("institutionalAppointments",[]):
+def extract_profile(js: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract and clean core profile fields."""
+    email = js.get("emailAddress", {}).get("address", "")
+    orcid = js.get("orcid", "")
+    depts = [p["department"].strip() for p in js.get("positions", []) if p.get("department")]
+    titles = [p["position"].strip() for p in js.get("positions", []) if p.get("position")]
+    for appt in js.get("institutionalAppointments", []):
         if appt.get("position"):
-            titles.append(appt["position"])
+            titles.append(appt["position"].strip())
 
     # clean long‐form fields
-    bio_clean = clean_text(js.get("overview",""))
-    teach_clean = clean_text(js.get("teachingSummary",""))
+    bio_clean = clean_text(js.get("overview", ""))
+    teach_clean = clean_text(js.get("teachingSummary", ""))
 
     # research interests
-    raw_ri = js.get("researchInterests","")
+    raw_ri = js.get("researchInterests", "")
     research = []
     if isinstance(raw_ri, str) and raw_ri.strip():
         research.append(clean_text(raw_ri))
@@ -218,9 +231,10 @@ def extract_profile(js: dict) -> dict:
                 research.append(clean_text(v))
 
     return {
-        "objectId":          js.get("objectId",""),
-        "first":             js.get("firstName",""),
-        "last":              js.get("lastName",""),
+        "objectId":          js.get("objectId", ""),
+        "discoveryUrlId":    js.get("discoveryUrlId", ""),
+        "firstName":         js.get("firstName", ""),
+        "lastName":          js.get("lastName", ""),
         "email":             email,
         "orcid":             orcid,
         "department":        "; ".join(sorted(set(depts))),
@@ -232,111 +246,99 @@ def extract_profile(js: dict) -> dict:
 
 # ---- PAGING GENERATOR ----------------------------------------------------
 def fetch_all_pages(url: str, payload_fn, per_page: int):
+    """Generic pager: yields lists of JSON items until exhausted."""
     start = 0
     while True:
-        payload = payload_fn(start)
-        r = session.post(url, json=payload, headers=API_HEADERS, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        results = data.get("items") or data.get("resource") or []
-        if not results:
+        try:
+            payload = payload_fn(start)
+            r = session.post(url, json=payload, headers=API_HEADERS, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+            results = data.get("items") or data.get("resource") or []
+            if not results:
+                break
+            yield results
+            total = data.get("pagination", {}).get("total", 0)
+            start += per_page
+            if start >= total:
+                break
+            time.sleep(PAUSE)
+        except Exception as e:
+            print(f"Error fetching page {start} from {url}: {str(e)}")
             break
-        yield results
-        total = data.get("pagination",{}).get("total", 0)
-        start += per_page
-        if start >= total:
-            break
-        time.sleep(PAUSE)
 
 # ---- FLATTEN HELPERS -----------------------------------------------------
-def flatten_publication(pub: dict, user_obj_id: str) -> dict:
-    authors = "; ".join(a.get("fullName","") for a in pub.get("authors",[]))
-    labels  = "; ".join(lbl.get("value","")   for lbl in pub.get("labels",[]))
-    pd      = pub.get("publicationDate",{})
+def flatten_publication(pub: Dict[str, Any], user_obj_id: str) -> Dict[str, Any]:
+    """Map publication JSON to flat CSV row."""
+    authors = "; ".join(a.get("fullName", "") for a in pub.get("authors", []))
+    labels  = "; ".join(l.get("value", "") for l in pub.get("labels", []))
+    pd = pub.get("publicationDate", {})
     return {
         "userObjectId":        user_obj_id,
-        "publicationObjectId": pub.get("objectId",""),
-        "title":               clean_text(pub.get("title","")),
-        "journal":             pub.get("journal",""),
-        "doi":                 pub.get("doi",""),
-        "pubYear":             pd.get("year",""),
-        "pubMonth":            pd.get("month",""),
-        "pubDay":              pd.get("day",""),
-        "volume":              pub.get("volume",""),
-        "issue":               pub.get("issue",""),
-        "pages":               pub.get("pagination",""),
-        "issn":                pub.get("issn",""),
+        "publicationObjectId": pub.get("objectId", ""),
+        "title":               clean_text(pub.get("title", "")),
+        "journal":             pub.get("journal", ""),
+        "doi":                 pub.get("doi", ""),
+        "pubYear":             pd.get("year", ""),
+        "pubMonth":            pd.get("month", ""),
+        "pubDay":              pd.get("day", ""),
+        "volume":              pub.get("volume", ""),
+        "issue":               pub.get("issue", ""),
+        "pages":               pub.get("pagination", ""),
+        "issn":                pub.get("issn", ""),
         "labels":              labels,
         "authors":             authors,
+        "url":                 pub.get("url", ""),
     }
 
-def flatten_grant(gr: dict, user_obj_id: str) -> dict:
-    d      = gr.get("date1",{})
-    labels = "; ".join(lbl.get("value","") for lbl in gr.get("labels",[]))
+def flatten_grant(gr: Dict[str, Any], user_obj_id: str) -> Dict[str, Any]:
+    """Map grant JSON to flat CSV row."""
+    d = gr.get("date1", {})
+    labels = "; ".join(l.get("value", "") for l in gr.get("labels", []))
     return {
         "userObjectId":  user_obj_id,
-        "grantObjectId": gr.get("objectId",""),
-        "title":         clean_text(gr.get("title","")),
-        "funder":        gr.get("funderName",""),
-        "awardType":     gr.get("objectTypeDisplayName",""),
-        "year":          d.get("year",""),
-        "month":         d.get("month",""),
-        "day":           d.get("day",""),
+        "grantObjectId": gr.get("objectId", ""),
+        "title":         clean_text(gr.get("title", "")),
+        "funder":        gr.get("funderName", ""),
+        "awardType":     gr.get("objectTypeDisplayName", ""),
+        "year":          d.get("year", ""),
+        "month":         d.get("month", ""),
+        "day":           d.get("day", ""),
         "labels":        labels,
+        "url":           gr.get("url", ""),
     }
 
-def flatten_teaching(act: dict, user_obj_id: str) -> dict:
-    d1 = act.get("date1",{})
-    d2 = act.get("date2",{})
+def flatten_teaching(act: Dict[str, Any], user_obj_id: str) -> Dict[str, Any]:
+    """Map teaching activity JSON to flat CSV row."""
+    d1 = act.get("date1", {})
+    d2 = act.get("date2", {})
     return {
         "userObjectId":             user_obj_id,
-        "teachingActivityObjectId": act.get("objectId",""),
-        "type":                     act.get("objectTypeDisplayName",""),
-        "startYear":                d1.get("year",""),
-        "startMonth":               d1.get("month",""),
-        "startDay":                 d1.get("day",""),
-        "endYear":                  d2.get("year",""),
-        "endMonth":                 d2.get("month",""),
-        "endDay":                   d2.get("day",""),
-        "title":                    clean_text(act.get("title","")),
+        "teachingActivityObjectId": act.get("objectId", ""),
+        "type":                     act.get("objectTypeDisplayName", ""),
+        "startYear":                d1.get("year", ""),
+        "startMonth":               d1.get("month", ""),
+        "startDay":                 d1.get("day", ""),
+        "endYear":                  d2.get("year", ""),
+        "endMonth":                 d2.get("month", ""),
+        "endDay":                   d2.get("day", ""),
+        "title":                    clean_text(act.get("title", "")),
+        "url":                      act.get("url", ""),
     }
 
-# ---- MAIN ---------------------------------------------------------------
-def main():
-    # Only search for Terrence Shaneyfelt
-    faculty_fullnames = ["Terrence Shaneyfelt"]
-    
-    with open(PROFILES_CSV,     "w", newline="", encoding="utf-8") as pf, \
-         open(PUBLICATIONS_CSV, "w", newline="", encoding="utf-8") as pbf, \
-         open(GRANTS_CSV,       "w", newline="", encoding="utf-8") as gf, \
-         open(TEACHING_CSV,     "w", newline="", encoding="utf-8") as tf:
+def process_user(disc_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch and process all data for a single user."""
+    try:
+        js = fetch_user_js(disc_id)
+        if not js:
+            return None
 
-        prof_writer   = csv.DictWriter(pf, fieldnames=PROFILE_FIELDS)
-        pubs_writer   = csv.DictWriter(pbf, fieldnames=PUB_FIELDS)
-        grants_writer = csv.DictWriter(gf, fieldnames=GRANT_FIELDS)
-        teach_writer  = csv.DictWriter(tf, fieldnames=TEACH_FIELDS)
+        prof = extract_profile(js)
+        uid = prof["objectId"]
 
-        prof_writer.writeheader()
-        pubs_writer.writeheader()
-        grants_writer.writeheader()
-        teach_writer.writeheader()
-
-        for full_name in faculty_fullnames:
-            print(f"Processing {full_name}…")
-            disc_id = find_disc_id(full_name)
-            if not disc_id:
-                print(f"  ❌ No discoveryUrlId for {full_name}")
-                continue
-
-            # Profile
-            js = fetch_user_js(disc_id)
-            profile = extract_profile(js)
-            prof_writer.writerow(profile)
-            uid = profile["objectId"]
-            print(f"  ✅ Profile saved (ID {uid})")
-
-            # Publications
-            for page in fetch_all_pages(
+        pubs = [
+            flatten_publication(p, uid)
+            for p in fetch_all_pages(
                 PUBS_API_URL,
                 lambda s: {
                     "objectId":      disc_id,
@@ -346,12 +348,12 @@ def main():
                     "sort":          "dateDesc"
                 },
                 PER_PAGE_PUBS
-            ):
-                for pub in page:
-                    pubs_writer.writerow(flatten_publication(pub, uid))
+            )
+        ]
 
-            # Grants
-            for page in fetch_all_pages(
+        grants = [
+            flatten_grant(g, uid)
+            for g in fetch_all_pages(
                 GRANTS_API_URL,
                 lambda s: {
                     "objectId":   disc_id,
@@ -359,12 +361,12 @@ def main():
                     "pagination": {"perPage": PER_PAGE_GRANTS, "startFrom": s}
                 },
                 PER_PAGE_GRANTS
-            ):
-                for gr in page:
-                    grants_writer.writerow(flatten_grant(gr, uid))
+            )
+        ]
 
-            # Teaching Activities
-            for page in fetch_all_pages(
+        teaching = [
+            flatten_teaching(t, uid)
+            for t in fetch_all_pages(
                 TEACHING_API_URL,
                 lambda s: {
                     "objectId":   disc_id,
@@ -372,15 +374,79 @@ def main():
                     "pagination": {"perPage": PER_PAGE_TEACHING, "startFrom": s}
                 },
                 PER_PAGE_TEACHING
-            ):
-                for act in page:
-                    teach_writer.writerow(flatten_teaching(act, uid))
+            )
+        ]
 
-    print("\nDone.")
-    print(f"Wrote profiles           → {PROFILES_CSV}")
-    print(f"Wrote publications       → {PUBLICATIONS_CSV}")
-    print(f"Wrote grants             → {GRANTS_CSV}")
-    print(f"Wrote teaching activities→ {TEACHING_CSV}")
+        return {
+            "profile": prof,
+            "publications": pubs,
+            "grants": grants,
+            "teaching": teaching
+        }
+    except Exception as e:
+        print(f"Error processing user {disc_id}: {str(e)}")
+        return None
+
+def main():
+    # Find discoveryUrlIds for all faculty
+    print(f"Searching for {len(faculty_fullnames)} faculty...")
+    disc_ids = []
+    for name in faculty_fullnames:
+        disc_id = find_disc_id(name)
+        if disc_id:
+            disc_ids.append(disc_id)
+            print(f"Found {name} → {disc_id}")
+        else:
+            print(f"Not found: {name}")
+
+    if not disc_ids:
+        print("No matching users found.")
+        return
+
+    print(f"\nFound {len(disc_ids)} users. Fetching full data...")
+
+    # Fetch and process all data
+    all_profiles = []
+    all_pubs = []
+    all_grants = []
+    all_teaching = []
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        futures = {pool.submit(process_user, disc_id): disc_id for disc_id in disc_ids}
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result:
+                all_profiles.append(result["profile"])
+                all_pubs.extend(result["publications"])
+                all_grants.extend(result["grants"])
+                all_teaching.extend(result["teaching"])
+
+    # Write CSVs
+    print(f"\nWriting {len(all_profiles)} profiles...")
+    with open(PROFILES_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=PROFILE_FIELDS)
+        writer.writeheader()
+        writer.writerows(all_profiles)
+
+    print(f"Writing {len(all_pubs)} publications...")
+    with open(PUBLICATIONS_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=PUB_FIELDS)
+        writer.writeheader()
+        writer.writerows(all_pubs)
+
+    print(f"Writing {len(all_grants)} grants...")
+    with open(GRANTS_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=GRANT_FIELDS)
+        writer.writeheader()
+        writer.writerows(all_grants)
+
+    print(f"Writing {len(all_teaching)} teaching activities...")
+    with open(TEACHING_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=TEACH_FIELDS)
+        writer.writeheader()
+        writer.writerows(all_teaching)
+
+    print("Done!")
 
 if __name__ == "__main__":
     main()

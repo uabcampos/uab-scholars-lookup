@@ -13,6 +13,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Dict, Any
 from datetime import datetime
+import unicodedata
 
 # —— CONFIG —— 
 DEPARTMENT = "Med - Preventive Medicine"  # substring to match
@@ -27,19 +28,40 @@ OUTPUT_CSV = f"users_by_department_{TIMESTAMP}.csv"
 
 FIELDNAMES = [
     "objectId",
+    "discoveryUrlId",
     "firstName",
     "lastName",
     "email",
-    "department",  # Changed from departments to match other scripts
+    "department",
     "positions"
 ]
 
 HEADERS = {
     "Accept":      "application/json, text/html, */*",
-    "User-Agent":  "Mozilla/5.0"
+    "Content-Type": "application/json",
+    "User-Agent":  "UAB-Scholars-Tool/1.0"
 }
 
 session = requests.Session()
+
+def clean_text(s: str) -> str:
+    """Normalize text and replace fancy punctuation with plain ASCII."""
+    if not isinstance(s, str):
+        return ""
+    # normalize unicode
+    t = unicodedata.normalize("NFKC", s)
+    # replace mojibake sequence
+    t = t.replace("‚Äì", "-")
+    # replace en/em dashes and curly quotes
+    subs = [
+        ("\u2013", "-"), ("\u2014", "-"),
+        (""", '"'), (""", '"'),
+        ("'", "'"), ("'", "'"),
+    ]
+    for orig, repl in subs:
+        t = t.replace(orig, repl)
+    # collapse whitespace
+    return " ".join(t.split())
 
 def fetch_and_filter(uid: int) -> Optional[Dict[str, Any]]:
     """
@@ -61,17 +83,19 @@ def fetch_and_filter(uid: int) -> Optional[Dict[str, Any]]:
 
         # collect unique department names and position titles
         depts = sorted({ p["department"].strip() for p in matches if p.get("department") })
-        titles = sorted({ p["position"].strip()   for p in positions if p.get("position") })
+        titles = sorted({ p["position"].strip() for p in positions if p.get("position") })
 
         return {
-            "objectId":    js.get("objectId", ""),
-            "firstName":   js.get("firstName", ""),
-            "lastName":    js.get("lastName", ""),
-            "email":       js.get("emailAddress", {}).get("address", ""),
-            "department":  "; ".join(depts),  # Changed from departments to match other scripts
-            "positions":   "; ".join(titles),
+            "objectId":       js.get("objectId", ""),
+            "discoveryUrlId": js.get("discoveryUrlId", ""),
+            "firstName":      js.get("firstName", ""),
+            "lastName":       js.get("lastName", ""),
+            "email":          js.get("emailAddress", {}).get("address", ""),
+            "department":     "; ".join(depts),
+            "positions":      "; ".join(titles),
         }
-    except Exception:
+    except Exception as e:
+        print(f"Error fetching user {uid}: {str(e)}")
         return None
 
 def main():
