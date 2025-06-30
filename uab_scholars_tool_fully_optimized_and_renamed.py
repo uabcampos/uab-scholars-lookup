@@ -280,7 +280,7 @@ class Tools:
                     if (u.get("firstName", "").lower() == first.lower() and
                         u.get("lastName", "").lower() == last.lower()):
                         search_details["api_responses"].append(api_response)
-                        return u.get("discoveryUrlId"), search_details
+                        return str(u.get("discoveryId") or u.get("objectId")), search_details
                     
                     # Partial match (e.g., first initial, middle name, etc.)
                     if (u.get("lastName", "").lower() == last.lower() and
@@ -292,7 +292,7 @@ class Tools:
                         if u.get("publications"): score += 1
                         if score > best_profile_score:
                             best_profile_score = score
-                            best_match = u.get("discoveryUrlId")
+                            best_match = str(u.get("discoveryId") or u.get("objectId"))
                 
                 search_details["api_responses"].append(api_response)
                 
@@ -502,7 +502,7 @@ class Tools:
                 response = requests.post(search_url, json=search_payload, headers=self.headers)
                 response.raise_for_status()
                 data = response.json()
-                scholars = data.get("items", [])
+                scholars = data.get("resource", [])
                 
                 if not scholars:
                     raise ValueError(f"No scholar found with ID: {scholar_id}")
@@ -594,22 +594,22 @@ class Tools:
                 for scholar in data.get("resource", []):
                     positions = scholar.get("positions", [])
                     if any(department.lower() in (p.get("department","") or "").lower() for p in positions):
-                        disc_id = scholar.get("discoveryUrlId")
-                        if disc_id:
-                            profile_data = await self._get_scholar_profile(scholar.get("objectId"), __event_emitter__)
+                        disc_numeric = scholarnum = scholar.get("objectId")
+                        if disc_numeric is not None:
+                            profile_data = await self._get_scholar_profile(disc_numeric, __event_emitter__)
                             # Ensure profile_data is a dict
                             if not isinstance(profile_data, dict):
                                 # Optionally log or collect the error here
                                 continue
                             publications = []
                             if self.valves.include_publications:
-                                publications = await self._get_publications(disc_id, __event_emitter__)
+                                publications = await self._get_publications(str(disc_numeric), __event_emitter__)
                             grants = []
                             if self.valves.include_grants:
-                                grants = await self._get_grants(disc_id, __event_emitter__)
+                                grants = await self._get_grants(str(disc_numeric), __event_emitter__)
                             teaching = []
                             if self.valves.include_teaching:
-                                teaching = await self._get_teaching_activities(disc_id, __event_emitter__)
+                                teaching = await self._get_teaching_activities(str(disc_numeric), __event_emitter__)
                             name = f"{profile_data.get('firstName', '')} {profile_data.get('lastName', '')}"
                             positions = profile_data.get("positions", [])
                             dept = next((p.get("department", "") for p in positions if p.get("department")), "N/A")
@@ -622,7 +622,7 @@ class Tools:
                                     "name": name,
                                     "department": dept,
                                     "position": pos,
-                                    "url": f"https://scholars.uab.edu/{disc_id}"
+                                    "url": f"https://scholars.uab.edu/{profile_data.get('discoveryUrlId','')}"
                                 },
                                 "publications": {
                                     "total": len(publications),
