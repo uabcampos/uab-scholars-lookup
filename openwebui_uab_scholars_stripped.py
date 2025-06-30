@@ -132,23 +132,28 @@ def _post(url: str, payload: Dict[str, Any], timeout: int = 15) -> Dict[str, Any
     return r.json()
 
 
+def _name_variations(name: str):
+    name = name.replace(".", " ")
+    parts = name.split()
+    if len(parts) >= 2:
+        first, last = parts[0], parts[-1]
+        yield f"{first} {last}"
+        yield f"{first[0]} {last}"
+        yield last
+    yield name
+
+
 def _find_numeric_id(full_name: str) -> Optional[str]:
-                                                                                          
-    payload = {
-        "params": {"by": "text", "category": "user", "text": full_name},
-        "pagination": {"startFrom": 0, "perPage": 25},
-    }
-    data = _post(f"{BASE}/users", payload)
-    for item in data.get("resource", []):
-        if (
-            item.get("firstName", "").lower() + " " + item.get("lastName", "").lower()
-            == full_name.lower()
-        ):
-            return str(item.get("discoveryId") or item.get("objectId"))
-                                    
-    if data.get("resource"):
-        it = data["resource"][0]
-        return str(it.get("discoveryId") or it.get("objectId"))
+    for query in _name_variations(full_name):
+        payload = {"params": {"by": "text", "category": "user", "text": query}, "pagination": {"startFrom": 0, "perPage": 25}}
+        data = _post(f"{BASE}/users", payload)
+        for item in data.get("resource", []):
+            candidate = (item.get("firstName", "") + " " + item.get("lastName", "")).lower()
+            if candidate.replace(".", "").replace("  ", " ").strip() == full_name.lower().replace(".", "").strip():
+                return str(item.get("discoveryId") or item.get("objectId"))
+        if data.get("resource"):
+            it = data["resource"][0]
+            return str(it.get("discoveryId") or it.get("objectId"))
     return None
 
 
