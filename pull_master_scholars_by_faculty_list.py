@@ -24,6 +24,7 @@ import unicodedata
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, List, Optional
+import scholars_api_shim  # noqa: F401
 
 from faculty_fullnames import faculty_fullnames
 
@@ -129,9 +130,7 @@ def get_name_variations(full_name: str) -> list:
         alt_name = name_map[full_name]
         alt_parts = alt_name.split()
         if len(alt_parts) > 1:
-            # For multi-part names, try both the full name and just first/last
             variations.append((alt_parts[0], alt_parts[-1]))
-            # Try with middle initial if present
             if len(alt_parts) > 2:
                 variations.append((f"{alt_parts[0]} {alt_parts[1]}", alt_parts[-1]))
         else:
@@ -145,20 +144,19 @@ def get_name_variations(full_name: str) -> list:
         if len(no_hyphen_parts) > 2:
             variations.append((no_hyphen_parts[0], f"{no_hyphen_parts[-2]} {no_hyphen_parts[-1]}"))
     
-    # Handle Jr./Sr. cases
+    # Handle Jr./Sr.
     if "Jr" in last or "Sr" in last:
         base_last = last.replace("Jr", "").replace("Sr", "").strip()
         variations.append((first, base_last))
         variations.append((first, f"{base_last}, Jr."))
         variations.append((first, f"{base_last}, Sr."))
-        # Try with middle initial if present
         if len(parts) > 2:
             variations.append((f"{first} {parts[1]}", base_last))
             variations.append((f"{first} {parts[1]}", f"{base_last}, Jr."))
             variations.append((f"{first} {parts[1]}", f"{base_last}, Sr."))
     
     # Try with middle initial if present
-    if len(parts) > 2 and len(parts[-2]) == 1:  # Middle initial
+    if len(parts) > 2 and len(parts[-2]) == 1:
         variations.append((f"{first} {parts[-2]}", last))
     
     return variations
@@ -176,12 +174,10 @@ def find_disc_id(full_name: str) -> Optional[str]:
             r.raise_for_status()
             
             for u in r.json().get("resource", []):
-                # Check if either the exact match or a close match
                 if (u.get("firstName","").lower() == first.lower() and
                     u.get("lastName","").lower() == last.lower()):
                     return u.get("discoveryUrlId")
                 
-                # Also check if the last name matches and first name is a variation
                 if (u.get("lastName","").lower() == last.lower() and
                     (u.get("firstName","").lower().startswith(first.lower()) or
                      first.lower().startswith(u.get("firstName","").lower()))):
@@ -193,18 +189,37 @@ def find_disc_id(full_name: str) -> Optional[str]:
     return None
 
 def fetch_user_js(disc_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch user JSON profile by discoveryUrlId."""
+    """
+    Fetch user JSON profile by discoveryUrlId.
+    If the API returns a list, unwrap it.
+    If the API returns {"resource": [...]}, unwrap that list.
+    """
     try:
         r = session.get(f"{API_USERS}/{disc_id}", headers=API_HEADERS, timeout=15)
         r.raise_for_status()
-        return r.json()
+        js = r.json()
+
+        # Case A: API returns a bare list of user objects
+        if isinstance(js, list):
+            if not js:
+                return None
+            js = js[0]
+
+        # Case B: API returns {"resource": [ {...} ]}
+        elif isinstance(js, dict) and "resource" in js:
+            resource = js.get("resource") or []
+            if not isinstance(resource, list) or len(resource) == 0:
+                return None
+            js = resource[0]
+
+        return js
+
     except Exception as e:
         print(f"Error fetching user {disc_id}: {str(e)}")
         return None
 
 # ---- PROFILE EXTRACTION --------------------------------------------------
 def extract_profile(js: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract and clean core profile fields."""
     email = js.get("emailAddress", {}).get("address", "")
     orcid = js.get("orcid", "")
     depts = [p["department"].strip() for p in js.get("positions", []) if p.get("department")]
@@ -213,11 +228,9 @@ def extract_profile(js: Dict[str, Any]) -> Dict[str, Any]:
         if appt.get("position"):
             titles.append(appt["position"].strip())
 
-    # clean long‐form fields
     bio_clean = clean_text(js.get("overview", ""))
     teach_clean = clean_text(js.get("teachingSummary", ""))
 
-    # research interests
     raw_ri = js.get("researchInterests", "")
     research = []
     if isinstance(raw_ri, str) and raw_ri.strip():
@@ -244,9 +257,7 @@ def extract_profile(js: Dict[str, Any]) -> Dict[str, Any]:
         "teachingSummary":   teach_clean,
     }
 
-# ---- PAGING GENERATOR ----------------------------------------------------
 def fetch_all_pages(url: str, payload_fn, per_page: int):
-    """Generic pager: yields lists of JSON items until exhausted."""
     start = 0
     while True:
         try:
@@ -267,9 +278,7 @@ def fetch_all_pages(url: str, payload_fn, per_page: int):
             print(f"Error fetching page {start} from {url}: {str(e)}")
             break
 
-# ---- FLATTEN HELPERS -----------------------------------------------------
 def flatten_publication(pub: Dict[str, Any], user_obj_id: str) -> Dict[str, Any]:
-    """Map publication JSON to flat CSV row."""
     authors = "; ".join(a.get("fullName", "") for a in pub.get("authors", []))
     labels  = "; ".join(l.get("value", "") for l in pub.get("labels", []))
     pd = pub.get("publicationDate", {})
@@ -292,7 +301,6 @@ def flatten_publication(pub: Dict[str, Any], user_obj_id: str) -> Dict[str, Any]
     }
 
 def flatten_grant(gr: Dict[str, Any], user_obj_id: str) -> Dict[str, Any]:
-    """Map grant JSON to flat CSV row."""
     d = gr.get("date1", {})
     labels = "; ".join(l.get("value", "") for l in gr.get("labels", []))
     return {
@@ -309,7 +317,6 @@ def flatten_grant(gr: Dict[str, Any], user_obj_id: str) -> Dict[str, Any]:
     }
 
 def flatten_teaching(act: Dict[str, Any], user_obj_id: str) -> Dict[str, Any]:
-    """Map teaching activity JSON to flat CSV row."""
     d1 = act.get("date1", {})
     d2 = act.get("date2", {})
     return {
@@ -336,52 +343,55 @@ def process_user(disc_id: str) -> Optional[Dict[str, Any]]:
         prof = extract_profile(js)
         uid = prof["objectId"]
 
-        pubs = [
-            flatten_publication(p, uid)
-            for p in fetch_all_pages(
-                PUBS_API_URL,
-                lambda s: {
-                    "objectId":      disc_id,
-                    "objectType":    "user",
-                    "pagination":    {"perPage": PER_PAGE_PUBS, "startFrom": s},
-                    "favouritesFirst": True,
-                    "sort":          "dateDesc"
-                },
-                PER_PAGE_PUBS
-            )
-        ]
+        # --- Publications: fetch pages, then flatten each publication dict ---
+        pubs = []
+        for page in fetch_all_pages(
+            PUBS_API_URL,
+            lambda s: {
+                "objectId":       disc_id,
+                "objectType":     "user",
+                "pagination":     {"perPage": PER_PAGE_PUBS, "startFrom": s},
+                "favouritesFirst": True,
+                "sort":           "dateDesc"
+            },
+            PER_PAGE_PUBS
+        ):
+            for p in page:
+                pubs.append(flatten_publication(p, uid))
 
-        grants = [
-            flatten_grant(g, uid)
-            for g in fetch_all_pages(
-                GRANTS_API_URL,
-                lambda s: {
-                    "objectId":   disc_id,
-                    "objectType": "user",
-                    "pagination": {"perPage": PER_PAGE_GRANTS, "startFrom": s}
-                },
-                PER_PAGE_GRANTS
-            )
-        ]
+        # --- Grants: same pattern ---
+        grants = []
+        for page in fetch_all_pages(
+            GRANTS_API_URL,
+            lambda s: {
+                "objectId":   disc_id,
+                "objectType": "user",
+                "pagination": {"perPage": PER_PAGE_GRANTS, "startFrom": s}
+            },
+            PER_PAGE_GRANTS
+        ):
+            for g in page:
+                grants.append(flatten_grant(g, uid))
 
-        teaching = [
-            flatten_teaching(t, uid)
-            for t in fetch_all_pages(
-                TEACHING_API_URL,
-                lambda s: {
-                    "objectId":   disc_id,
-                    "objectType": "user",
-                    "pagination": {"perPage": PER_PAGE_TEACHING, "startFrom": s}
-                },
-                PER_PAGE_TEACHING
-            )
-        ]
+        # --- Teaching activities: same pattern ---
+        teaching = []
+        for page in fetch_all_pages(
+            TEACHING_API_URL,
+            lambda s: {
+                "objectId":   disc_id,
+                "objectType": "user",
+                "pagination": {"perPage": PER_PAGE_TEACHING, "startFrom": s}
+            },
+            PER_PAGE_TEACHING
+        ):
+            for t in page:
+                teaching.append(flatten_teaching(t, uid))
 
         return {
-            "profile": prof,
+            "profile":      prof,
             "publications": pubs,
-            "grants": grants,
-            "teaching": teaching
+            "grants":       grants,
+            "teaching":     teaching
         }
     except Exception as e:
         print(f"Error processing user {disc_id}: {str(e)}")

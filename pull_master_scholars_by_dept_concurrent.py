@@ -19,6 +19,7 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+import scholars_api_shim  # noqa: F401
 
 # —— CONFIG —— 
 DEPARTMENT        = "Med - Preventive Medicine"  # substring to match

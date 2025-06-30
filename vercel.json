@@ -1,0 +1,27 @@
+{
+    "version": 2,
+    "builds": [
+      {
+        "src": "api/fetch_scholar.py",
+        "use": "@vercel/python",
+        "config": {
+          "pythonVersion": "3.11",
+          "maxDuration": 30
+        }
+      },
+      {
+        "src": "api/openapi.json",
+        "use": "@vercel/static"
+      }
+    ],
+    "routes": [
+      {
+        "src": "/openapi.json",
+        "dest": "api/openapi.json"
+      },
+      {
+        "src": "/(.*)",
+        "dest": "api/fetch_scholar.py"
+      }
+    ]
+  }
