@@ -298,4 +298,37 @@ __all__ = [
     "fetch_profile_by_name",
     "search_department",
     "list_publications",
-] 
+]
+
+# ---------------------------------------------------------------------------
+# Compatibility wrapper: class Tools expected by some Open WebUI versions
+# ---------------------------------------------------------------------------
+
+class Tools:  # noqa: D101 – thin wrapper class for WebUI autodiscovery
+    """Expose module-level functions through a class interface.
+
+    Certain Open WebUI builds look for a `Tools` class when loading python
+    modules. This minimal shim delegates to the standalone functions defined
+    above, so you can use either style:
+
+        from openwebui_uab_scholars import Tools  # class usage
+        t = Tools()
+        result = t.fetch_profile_by_name({"faculty_name": "Andrea Cherrington"})
+
+    or directly call the free functions.
+    """
+
+    def fetch_profile_by_name(self, params):  # type: ignore[valid-type]
+        if isinstance(params, dict):
+            params = NameLookup(**params)
+        return fetch_profile_by_name(params)
+
+    def search_department(self, params):  # type: ignore[valid-type]
+        if isinstance(params, dict):
+            params = DepartmentSearch(**params)
+        return search_department(params)
+
+    def list_publications(self, params):  # type: ignore[valid-type]
+        if isinstance(params, dict):
+            params = PublicationsOnly(**params)
+        return list_publications(params) 
