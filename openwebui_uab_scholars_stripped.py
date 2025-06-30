@@ -251,14 +251,14 @@ def _get_publications(disc_id: str, limit: int) -> List[Dict[str, Any]]:
         }
         data = _post(f"{BASE}/publications/linkedTo", payload)
         for pub in data.get("resource", []):
-            out.append(
-                {
-                    "title": pub.get("title"),
-                    "year": pub.get("publicationDate", {}).get("year"),
-                    "journal": pub.get("journal"),
-                    "doi": pub.get("doi"),
-                }
-            )
+            link = pub.get("url") or (f"https://doi.org/{pub['doi']}" if pub.get("doi") else None)
+            out.append({
+                "title": pub.get("title"),
+                "year": pub.get("publicationDate", {}).get("year"),
+                "journal": pub.get("journal"),
+                "doi": pub.get("doi"),
+                "url": link,
+            })
             if len(out) >= limit:
                 break
         if start + per_page >= data.get("pagination", {}).get("total", 0):
