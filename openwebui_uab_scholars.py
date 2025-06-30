@@ -305,7 +305,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 class Tools:  # noqa: D101 – thin wrapper class for WebUI autodiscovery
-    """Expose module-level functions through a class interface.
+    r"""Expose module-level functions through a class interface.
 
     Certain Open WebUI builds look for a `Tools` class when loading python
     modules. This minimal shim delegates to the standalone functions defined
