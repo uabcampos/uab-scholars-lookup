@@ -82,6 +82,34 @@ HDRS = {
     "Content-Type": "application/json",
 }
 
+# Simple XML-ish wrapper formats (mirrors example structure)
+MAIN_FORMAT = (
+    """
+<interpreter_output>
+    <description>{description}</description>
+    <output>{output}</output>
+</interpreter_output>
+"""
+)
+
+# Basic logger (optional)
+import logging
+
+
+def _setup_logger():
+    name = "UABScholarsTool"
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        logger.setLevel(logging.DEBUG)
+        h = logging.StreamHandler()
+        h.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        logger.addHandler(h)
+        logger.propagate = False
+    return logger
+
+
+logger = _setup_logger()
+
 # ---------------------------------------------------------------------------
 # Pydantic models (input validation + automatic JSON schema for WebUI)
 # ---------------------------------------------------------------------------
@@ -321,14 +349,26 @@ class Tools:  # noqa: D101 – thin wrapper class for WebUI autodiscovery
     def fetch_profile_by_name(self, params):  # type: ignore[valid-type]
         if isinstance(params, dict):
             params = NameLookup(**params)
-        return fetch_profile_by_name(params)
+        data = fetch_profile_by_name(params)
+        return MAIN_FORMAT.format(
+            description=f"Profile for {params.faculty_name} (publications={params.include_publications}, grants={params.include_grants})",
+            output=json.dumps(data, ensure_ascii=False),
+        )
 
     def search_department(self, params):  # type: ignore[valid-type]
         if isinstance(params, dict):
             params = DepartmentSearch(**params)
-        return search_department(params)
+        data = search_department(params)
+        return MAIN_FORMAT.format(
+            description=f"Department search for '{params.department}'",
+            output=json.dumps(data, ensure_ascii=False),
+        )
 
     def list_publications(self, params):  # type: ignore[valid-type]
         if isinstance(params, dict):
             params = PublicationsOnly(**params)
-        return list_publications(params) 
+        data = list_publications(params)
+        return MAIN_FORMAT.format(
+            description=f"Publications for scholar {params.scholar_id}",
+            output=json.dumps(data, ensure_ascii=False),
+        ) 
