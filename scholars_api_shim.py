@@ -32,6 +32,8 @@ def _transform_payload(obj: Any) -> None:
             obj["category"] = obj.pop("objectType")
         if "type" in obj and "category" not in obj:
             obj["category"] = obj.pop("type")
+        if "object" in obj and "category" not in obj:
+            obj["category"] = obj.pop("object")
 
         # Inject default pagination for /api/users query payloads
         if "params" in obj and isinstance(obj["params"], dict):

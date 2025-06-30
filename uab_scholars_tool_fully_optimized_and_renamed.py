@@ -88,8 +88,14 @@ v0.1.5 (2024-03-24)
 - Optimized response sizes for manageable output
 - Simplified code structure for easier maintenance
 
+v0.2.0 (2025-06-30)
+- **API migration**: updated all internal calls to use the new Scholars@UAB contract ("category": "user" plus mandatory pagination).
+- **Numeric IDs**: switched to numeric `discoveryId` for linked-endpoint payloads.
+- **Compatibility shim**: added `scholars_api_shim` so legacy code continues to work without further edits.
+- **Deployment**: verified with Vercel python-3.11 runtime & increased timeout.
+
 Author: Chris Campos
-Version: 0.1.5
+Version: 0.2.0
 License: MIT
 """
 
@@ -243,7 +249,10 @@ class Tools:
             search_query = f"{first} {last}"
             search_details["tried_variations"].append(search_query)
             
-            payload = {"params": {"by": "text", "object": "user", "text": search_query}}
+            payload = {
+                "params": {"by": "text", "category": "user", "text": search_query},
+                "pagination": {"startFrom": 0, "perPage": 25},
+            }
             try:
                 r = requests.post(f"{self.base_url}/users", json=payload, headers=self.headers, timeout=15)
                 r.raise_for_status()
@@ -487,11 +496,8 @@ class Tools:
                 # Get the numeric ID from the discovery URL ID
                 search_url = f"{self.base_url}/users"
                 search_payload = {
-                    "params": {
-                        "by": "text",
-                        "object": "user",
-                        "text": disc_url_id
-                    }
+                    "params": {"by": "text", "category": "user", "text": disc_url_id},
+                    "pagination": {"startFrom": 0, "perPage": 25},
                 }
                 response = requests.post(search_url, json=search_payload, headers=self.headers)
                 response.raise_for_status()
@@ -573,15 +579,8 @@ class Tools:
         
         while True:
             search_payload = {
-                "params": {
-                    "by": "text",
-                    "object": "user",
-                    "text": department
-                },
-                "pagination": {
-                    "perPage": per_page,
-                    "startFrom": start
-                }
+                "params": {"by": "text", "category": "user", "text": department},
+                "pagination": {"perPage": per_page, "startFrom": start},
             }
             try:
                 response = requests.post(search_url, json=search_payload, headers=self.headers)
@@ -748,7 +747,7 @@ class Tools:
         while True:
             payload = {
                 "objectId": disc_url_id,
-                "objectType": "user",
+                "category": "user",
                 "pagination": {"perPage": per_page, "startFrom": start},
                 "favouritesFirst": True,
                 "sort": "dateDesc"
@@ -813,7 +812,7 @@ class Tools:
         while True:
             payload = {
                 "objectId": disc_url_id,
-                "objectType": "user",
+                "category": "user",
                 "pagination": {"perPage": per_page, "startFrom": start},
                 "favouritesFirst": True,
                 "sort": "dateDesc"
@@ -876,7 +875,7 @@ class Tools:
         while True:
             payload = {
                 "objectId": disc_url_id,
-                "objectType": "user",
+                "category": "user",
                 "pagination": {"perPage": per_page, "startFrom": start}
             }
             
@@ -1113,7 +1112,7 @@ class Tools:
                 pubs_url = f"{self.base_url}/publications/linkedTo"
                 payload = {
                     "objectId": disc_id,
-                    "objectType": "user",
+                    "category": "user",
                     "pagination": {"perPage": 10, "startFrom": 0},
                     "favouritesFirst": True,
                     "sort": "dateDesc"
@@ -1129,7 +1128,7 @@ class Tools:
                 grants_url = f"{self.base_url}/grants/linkedTo"
                 payload = {
                     "objectId": disc_id,
-                    "objectType": "user",
+                    "category": "user",
                     "pagination": {"perPage": 10, "startFrom": 0}
                 }
                 r = requests.post(grants_url, json=payload, headers=self.headers, timeout=10)
@@ -1143,7 +1142,7 @@ class Tools:
                 teach_url = f"{self.base_url}/teachingActivities/linkedTo"
                 payload = {
                     "objectId": disc_id,
-                    "objectType": "user",
+                    "category": "user",
                     "pagination": {"perPage": 10, "startFrom": 0}
                 }
                 r = requests.post(teach_url, json=payload, headers=self.headers, timeout=10)
