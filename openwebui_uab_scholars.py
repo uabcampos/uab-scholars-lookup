@@ -21,13 +21,59 @@ import json
 import time
 from typing import Any, Dict, List, Optional
 
+import copy
 import requests
 from pydantic import BaseModel, Field
 
-try:
-    import scholars_api_shim  # patches requests for any stray legacy payloads, noqa: F401
-except ModuleNotFoundError:  # running outside the repo; shim is optional
-    scholars_api_shim = None
+# ---------------------------------------------------------------------------
+# Minimal inline shim (replaces external scholars_api_shim)
+# ---------------------------------------------------------------------------
+
+_ORIG_POST = requests.Session.post  # save original bound method
+_ORIG_REQ_POST = requests.post      # save original function
+
+def _transform_payload(obj: Any) -> None:
+    """Recursively convert legacy keys and inject default pagination."""
+    if isinstance(obj, dict):
+        if "objectType" in obj and "category" not in obj:
+            obj["category"] = obj.pop("objectType")
+        if "type" in obj and "category" not in obj:
+            obj["category"] = obj.pop("type")
+        if "object" in obj and "category" not in obj:
+            obj["category"] = obj.pop("object")
+
+        # auto-pagination for /api/users queries if absent
+        if "params" in obj and isinstance(obj["params"], dict):
+            if obj["params"].get("by") == "text" and obj["params"].get("category") == "user":
+                obj.setdefault("pagination", {"startFrom": 0, "perPage": 25})
+
+        for v in obj.values():
+            _transform_payload(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            _transform_payload(item)
+
+
+def _patched_post(self_or_url, url: str | None = None, *args, **kw):
+    """Wrapper around requests.post / Session.post that applies transformation."""
+    is_session = isinstance(self_or_url, requests.Session)
+    sess = self_or_url if is_session else None
+    dest = url if is_session else self_or_url  # positional semantics
+
+    if "json" in kw and isinstance(kw["json"], (dict, list)):
+        js_copy = copy.deepcopy(kw["json"])
+        _transform_payload(js_copy)
+        kw["json"] = js_copy
+
+    if is_session:
+        return _ORIG_POST(sess, dest, *args, **kw)
+    return _ORIG_REQ_POST(dest, *args, **kw)
+
+# Monkey-patch once
+if not getattr(requests, "_uab_inline_patch", False):
+    requests.Session.post = _patched_post  # type: ignore[assignment]
+    requests.post = _patched_post  # type: ignore[assignment]
+    requests._uab_inline_patch = True
 
 BASE = "https://scholars.uab.edu/api"
 HDRS = {
