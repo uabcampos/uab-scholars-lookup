@@ -24,7 +24,10 @@ from typing import Any, Dict, List, Optional
 import requests
 from pydantic import BaseModel, Field
 
-import scholars_api_shim  # patches requests for any stray legacy payloads, noqa: F401
+try:
+    import scholars_api_shim  # patches requests for any stray legacy payloads, noqa: F401
+except ModuleNotFoundError:  # running outside the repo; shim is optional
+    scholars_api_shim = None
 
 BASE = "https://scholars.uab.edu/api"
 HDRS = {
