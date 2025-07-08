@@ -143,17 +143,34 @@ def _name_variations(name: str):
     yield name
 
 
+_ID_CACHE: Dict[str, str] = {}
+
 def _find_numeric_id(full_name: str) -> Optional[str]:
-    for query in _name_variations(full_name):
-        payload = {"params": {"by": "text", "category": "user", "text": query}, "pagination": {"startFrom": 0, "perPage": 25}}
-        data = _post(f"{BASE}/users", payload)
-        for item in data.get("resource", []):
-            candidate = (item.get("firstName", "") + " " + item.get("lastName", "")).lower()
-            if candidate.replace(".", "").replace("  ", " ").strip() == full_name.lower().replace(".", "").strip():
-                return str(item.get("discoveryId") or item.get("objectId"))
-        if data.get("resource"):
-            it = data["resource"][0]
-            return str(it.get("discoveryId") or it.get("objectId"))
+    payload = {"params": {"by": "text", "category": "user", "text": full_name}, "pagination": {"startFrom": 0, "perPage": 25}}
+    data = _post(f"{BASE}/users", payload)
+
+    def _norm(n: str) -> str:
+        return " ".join(n.lower().split())
+
+    target = _norm(full_name)
+    exact, loose = [], []
+    for item in data.get("resource", []):
+        full = _norm(f"{item.get('firstName','')} {item.get('lastName','')}")
+        if full == target:
+            exact.append(item)
+        elif target in full or full in target:
+            loose.append(item)
+
+    chosen = None
+    if exact:
+        chosen = sorted(exact, key=lambda x: int(x.get("discoveryId", 1e9)))[0]
+    elif loose:
+        chosen = sorted(loose, key=lambda x: int(x.get("discoveryId", 1e9)))[0]
+    elif data.get("resource"):
+        chosen = data["resource"][0]
+
+    if chosen:
+        return str(chosen.get("discoveryId") or chosen.get("objectId"))
     return None
 
 
@@ -164,6 +181,8 @@ def _find_numeric_id(full_name: str) -> Optional[str]:
 def fetch_profile_by_name(params: NameLookup) -> Dict[str, Any]:              
                                                                                 
     disc_id = _find_numeric_id(params.faculty_name)
+    if disc_id:
+        _ID_CACHE[params.faculty_name.strip().lower()] = disc_id
     if disc_id is None:
         return {"status": "not_found", "message": "Scholar not found"}
 
@@ -232,7 +251,7 @@ def search_department(params: DepartmentSearch) -> Dict[str, Any]:
 def list_publications(params: PublicationsOnly) -> Dict[str, Any]:
                                                                                
     pubs = _get_publications(params.scholar_id, params.max_items)
-    return {"status": "ok", "publications": pubs}
+    return {"status": "ok", "scholarId": params.scholar_id, "publications": pubs}
 
 
                                                                              
@@ -251,7 +270,13 @@ def _get_publications(disc_id: str, limit: int) -> List[Dict[str, Any]]:
         }
         data = _post(f"{BASE}/publications/linkedTo", payload)
         for pub in data.get("resource", []):
-            link = pub.get("url") or (f"https://doi.org/{pub['doi']}" if pub.get("doi") else None)
+            link_field = pub.get("url")
+            if link_field and link_field.startswith("http"):
+                link = link_field
+            elif pub.get("doi"):
+                link = f"https://doi.org/{pub['doi']}"
+            else:
+                link = None
             out.append({
                 "title": pub.get("title"),
                 "year": pub.get("publicationDate", {}).get("year"),
@@ -278,7 +303,14 @@ def _get_grants(disc_id: str, limit: int) -> List[Dict[str, Any]]:
         }
         data = _post(f"{BASE}/grants/linkedTo", payload)
         for g in data.get("resource", []):
-            out.append({"title": g.get("title"), "funder": g.get("funderName")})
+            out.append(
+                {
+                    "title": g.get("title"),
+                    "funder": g.get("funderName"),
+                    "awardType": g.get("objectTypeDisplayName"),
+                    "year": g.get("date1", {}).get("year"),
+                }
+            )
             if len(out) >= limit:
                 break
         if start + per_page >= data.get("pagination", {}).get("total", 0):
@@ -310,10 +342,34 @@ def _get_teaching(disc_id: str, limit: int) -> List[Dict[str, Any]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Backward-compatibility convenience: quick lookup by name (no extras)
+# ---------------------------------------------------------------------------
+
+
+def search_by_name(faculty_name: str) -> Dict[str, Any]:
+    """Return a minimal profile block (no pubs/grants) for *faculty_name*."""
+    disc_id = _find_numeric_id(faculty_name)
+    if disc_id is None:
+        return {"status": "not_found", "message": "Scholar not found"}
+
+    profile = requests.get(f"{BASE}/users/{disc_id}", headers=HDRS, timeout=15).json()
+    return {
+        "status": "ok",
+        "firstName": profile.get("firstName"),
+        "lastName": profile.get("lastName"),
+        "discoveryUrlId": profile.get("discoveryUrlId", f"{disc_id}-{profile.get('firstName','').lower()}-{profile.get('lastName','').lower()}").lower(),
+        "position": "; ".join(p.get("position", "") for p in profile.get("positions", []) if p.get("position")),
+        "department": "; ".join(p.get("department", "") for p in profile.get("positions", []) if p.get("department")),
+        "profileUrl": f"https://scholars.uab.edu/{profile.get('discoveryUrlId', disc_id)}",
+    }
+
+
 __all__ = [
     "fetch_profile_by_name",
     "search_department",
     "list_publications",
+    "search_by_name",
 ]
 
                                                                              
@@ -358,5 +414,16 @@ class Tools:
         data = list_publications(params)
         return MAIN_FORMAT.format(
             description=f"Publications for scholar {params.scholar_id}",
+            output=json.dumps(data, ensure_ascii=False),
+        )
+
+    # ------------------------------------------------------------------
+    # Compatibility method: search_by_name
+    # ------------------------------------------------------------------
+
+    def search_by_name(self, faculty_name: str):  # type: ignore[valid-type]
+        data = search_by_name(faculty_name)
+        return MAIN_FORMAT.format(
+            description=f"Quick lookup for {faculty_name}",
             output=json.dumps(data, ensure_ascii=False),
         ) 

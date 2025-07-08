@@ -1,18 +1,32 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.so
 
 # Virtual environments
 venv/
-ENV/
-.env/
+.env
 
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
+# Build / dist
+build/
+dist/
+*.egg-info/
 
-# VSCode settings
+# IDE
 .vscode/
+.idea/
 
-# macOS
+# Large data & outputs
+biosketches/
+scholar_data/
+output_bios*/
+*.csv
+*.json
+*.docx
+*.pdf
+*.png
+*.jpg
+*.jpeg
+
+# Misc
 .DS_Store

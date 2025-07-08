@@ -1,0 +1,23 @@
+[project]
+name = "uab-scholars-lookup"
+version = "0.1.0"
+description = "Thin client library for the Scholars@UAB REST API"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{name = "Your Name", email = "your.email@example.com"}]
+license = {text = "MIT"}
+
+dependencies = [
+    "requests>=2.31",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+cli = ["click>=8.0"]
+
+[project.scripts]
+uab-scholars = "uab_scholars.cli:main"
+
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta" 

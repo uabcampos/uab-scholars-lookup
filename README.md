@@ -1,3 +1,30 @@
+# UAB Scholars Lookup
+
+Thin Python client for the [Scholars@UAB](https://scholars.uab.edu/) REST API.
+
+```bash
+pip install uab-scholars-lookup   # soon on PyPI
+
+# Search by name
+uab-scholars search "Andrea Cherrington"
+
+# List faculty in Preventive Medicine
+uab-scholars department "Med - Preventive Medicine" --max 10
+```
+
+See `UAB_Scholars_API_README.md` for full endpoint docs and advanced filter payloads.
+
+---
+
+## Development
+
+```bash
+git clone https://github.com/your-org/uab-scholars-lookup && cd uab-scholars-lookup
+python -m venv venv && source venv/bin/activate
+pip install -e .[cli] -r requirements-dev.txt
+pytest
+```
+
 # UAB Scholars API Data Puller
 
 A collection of Python scripts to pull data from the Scholars@UAB API.
@@ -29,7 +56,7 @@ These scripts provide various ways to pull faculty data from the Scholars@UAB AP
    ```bash
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
+   ```  
 3. Install dependencies:
    ```bash
    pip install -r requirements.txt
@@ -119,22 +146,22 @@ Each script has configurable parameters at the top:
 ## Usage
 
 1. Pull data for a list of faculty:
-   ```bash
-   python pull_master_scholars_by_faculty_list.py
-   ```
+```bash
+python pull_master_scholars_by_faculty_list.py
+```
 
 2. Pull data for a specific user:
-   ```bash
+```bash
    python pull_scholar_profile_by_user_csvs.py
    ```
 
 3. Search by department:
-   ```bash
-   python search_by_department_concurrent.py
-   ```
+```bash
+python search_by_department_concurrent.py
+```
 
 4. Pull all data for a department:
-   ```bash
+```bash
    python pull_master_scholars_by_dept_concurrent.py
    ```
 
@@ -215,26 +242,47 @@ All scripts generate CSV files with consistent field names and timestamps:
 
 ## Recent Improvements
 
-1. Error Handling:
-   - Added comprehensive error handling for API calls
-   - Improved error messages and logging
-   - Graceful handling of network issues and timeouts
+1. Reserved Key Conflict Resolved (type → result_type):
+   - In LLM environments like Open WebUI, "type" is often a reserved field that causes runtime errors.
+   - All occurrences of "type" in JSON responses were renamed to "result_type".
 
-2. Performance:
-   - Increased page sizes for API calls to 500 items
-   - Optimized concurrent processing
-   - Better memory management for large datasets
+2. Safer and More Consistent JSON Schema:
+   - Responses are now better structured with:
+     - result_type
+     - status
+     - message
+     - results (always a list, even if empty)
+     - error_details only when relevant
+   - This prevents key mismatches and simplifies downstream handling by consumers (like LLMs or web apps).
 
-3. Data Quality:
-   - Consistent field naming across all scripts
-   - Added URLs for publications, grants, and teaching activities
-   - Improved text cleaning and normalization
-   - Better handling of special characters and unicode
+3. Internal Method Error Guarding:
+   - Methods that return data (_get_scholar_profile, _get_publications, etc.) now ensure that returned values are of the expected types.
+   - This prevents cascading failures from bad API responses and makes the tool more robust in production.
 
-4. Code Quality:
-   - Added type hints for better code maintainability
-   - Improved code organization and documentation
-   - Consistent coding style across all scripts
+4. Event Emission Fully Optional and Safe:
+   - All _emit_* functions now silently skip emission if __event_emitter__ is None.
+   - This avoids runtime errors when running standalone or outside of WebUI.
+
+5. Async/Await Hygiene Improvements:
+   - Cleaned up inconsistent await usage across internal and external methods.
+   - This reduces unnecessary concurrency overhead and makes behavior more predictable.
+
+6. Improved Error Reporting and Debug Output:
+   - Enhanced error blocks now include:
+     - "error_details" for debugging
+     - "suggestion" fields for LLMs to suggest next steps
+   - This improves UX for end users and AI agents.
+
+7. Response Size Optimization:
+   - Publication, grant, and teaching lists now return:
+     - Just the first few most relevant items
+     - Full counts in a total key
+   - This keeps output manageable for LLM context limits and faster rendering.
+
+8. Code Structure Simplified for Maintenance:
+   - Removed redundancies across sync/async versions.
+   - Modularized JSON response construction.
+   - This makes future changes faster and safer.
 
 ## Troubleshooting
 

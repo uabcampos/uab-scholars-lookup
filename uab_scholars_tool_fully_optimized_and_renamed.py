@@ -1,4 +1,4 @@
-"""
+r"""
 UAB Scholars Search Tool
 
 A Python tool for searching and retrieving information about UAB faculty members,
@@ -99,88 +99,77 @@ Version: 0.2.0
 License: MIT
 """
 
-import requests
-import json
-import time
-import unicodedata
-import re
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Dict, Any, Optional, Union
+import requests, json, time, unicodedata, re, concurrent.futures
+from typing import List, Dict, Optional, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import concurrent.futures
+from pydantic import BaseModel, Field
 import scholars_api_shim  # noqa: F401
 
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Top-level tool class
+# ────────────────────────────────────────────────────────────────────────────────
 class Tools:
     class Valves(BaseModel):
-        """Configuration options for the UAB Scholars tool."""
-        
-        max_results: int = Field(
-            default=10,
-            description="Maximum number of scholars to retrieve",
-        )
-        include_publications: bool = Field(
-            default=True,
-            description="Whether to include publications in the results",
-        )
-        include_grants: bool = Field(
-            default=True,
-            description="Whether to include grants in the results",
-        )
-        include_teaching: bool = Field(
-            default=True,
-            description="Whether to include teaching activities in the results",
-        )
+        """User-tunable switches for what to include in results."""
+        max_results: int = Field(10, description="Maximum scholars to retrieve")
+        include_publications: bool = Field(True, description="Include publications")
+        include_grants: bool = Field(True, description="Include grants")
+        include_teaching: bool = Field(True, description="Include teaching activities")
 
+    # --------------------------------------------------------------------- init
     def __init__(self):
         self.valves = self.Valves()
         self.base_url = "https://scholars.uab.edu/api"
         self.headers = {
             "Accept": "application/json, text/html, */*",
-            "User-Agent": "Mozilla/5.0",
+            "User-Agent": "Mozilla/5.0 (UAB-Scholars-Tool)",
             "Content-Type": "application/json",
         }
 
+    # ───────────────────────────────────────────────────────────────────── Helpers
     def clean_text(self, s: str) -> str:
-        """Normalize unicode, replace mojibake and fancy punctuation, collapse whitespace."""
+        """Unicode-normalise, fix “smart quotes”, collapse whitespace."""
         if not isinstance(s, str):
             return ""
-        t = unicodedata.normalize("NFKC", s)
-        t = t.replace("‚Äì", "-")
+        t = unicodedata.normalize("NFKC", s).replace("‚Äì", "-")
         for orig, repl in [
-            ("\u2013", "-"), ("\u2014", "-"),
-            (""", '"'), (""", '"'),
-            ("'", "'"), ("'", "'"),
+            ("\u2013", "-"),  # en-dash
+            ("\u2014", "-"),  # em-dash
+            ("\u201C", '"'), ("\u201D", '"'),  # left/right double quotes
+            ("\u2018", "'"), ("\u2019", "'"),  # left/right single quotes
         ]:
             t = t.replace(orig, repl)
         return " ".join(t.split())
 
-    async def _emit_status(self, description: str, status: str = "in_progress", done: bool = False, __event_emitter__=None):
-        """Helper method to emit status updates."""
+    async def _emit_status(
+        self,
+        msg: str,
+        *,
+        status: str = "in_progress",
+        done: bool = False,
+        __event_emitter__=None,
+    ):
         if __event_emitter__:
             await __event_emitter__(
-                {
-                    "object": "status",
-                    "data": {
-                        "status": status,
-                        "description": description,
-                        "done": done,
-                    },
-                }
+                {"object": "status", "data": {"status": status, "description": msg, "done": done}}
             )
 
-    async def _emit_citation(self, name: str, bio: str, url: str, __event_emitter__=None):
-        """Helper method to emit citations."""
+    async def _emit_citation(
+        self,
+        name: str,
+        bio: str,
+        url: str,
+        __event_emitter__=None,
+    ):
         if __event_emitter__:
             await __event_emitter__(
                 {
                     "object": "citation",
                     "data": {
-                        "document": [
-                            f"UAB Scholar: {name}",
-                            bio,
-                        ],
+                        "document": [f"UAB Scholar: {name}", bio],
                         "metadata": [{"source": url}],
-                        "source": {"name": f"UAB Scholars - {name}"},
+                        "source": {"name": f"UAB Scholars – {name}"},
                     },
                 }
             )
@@ -306,17 +295,17 @@ class Tools:
         return best_match, search_details
 
     def slugify(self, text: str) -> str:
-        """Convert text to URL-friendly slug."""
+        """Convert text to URL‑safe slug."""
         # Convert to lowercase and normalize unicode
-        text = unicodedata.normalize('NFKD', text.lower())
-        # Remove special characters and replace spaces with hyphens
-        text = re.sub(r'[^a-z0-9\s-]', '', text)
-        # Replace spaces with hyphens
-        text = re.sub(r'\s+', '-', text)
-        # Remove multiple hyphens
-        text = re.sub(r'-+', '-', text)
-        # Remove leading/trailing hyphens
-        return text.strip('-')
+        text = unicodedata.normalize("NFKD", text.lower())
+        # Remove special characters, keep alphanumerics, whitespace and hyphens
+        text = re.sub(r"[^a-z0-9\s-]", "", text)
+        # Collapse contiguous whitespace into single hyphens
+        text = re.sub(r"\s+", "-", text)
+        # Collapse multiple hyphens
+        text = re.sub(r"-{2,}", "-", text)
+        # Trim leading/trailing hyphens
+        return text.strip("-")
 
     async def search_scholars(
         self, query: str, department: str = "", __event_emitter__=None
@@ -1302,7 +1291,7 @@ class Tools:
             )
             return json.dumps(error_response, indent=2)
 
-"""
+r"""
 Example usage:
 
 import asyncio
