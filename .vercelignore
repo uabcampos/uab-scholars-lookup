@@ -1,0 +1,29 @@
+# Ignore SQLite cache and WAL files
+api/profile_cache.sqlite
+api/profile_cache.sqlite-shm
+api/profile_cache.sqlite-wal
+
+# Ignore data, output, and document files
+*.txt
+*.csv
+*.docx
+*.json
+*.md
+
+# Ignore output and data directories
+output_bios/
+output_bios_docx/
+scholar_data/
+CDTR Members.CVs/
+CV extracted data/
+investigator_images/
+faculty_photos/
+biosketches/
+scripts/
+tests/
+
+# Ignore Python virtual environment
+venv/
+
+# Ignore other hidden/system files
+.DS_Store 
