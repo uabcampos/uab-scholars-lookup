@@ -22,9 +22,14 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
+from functools import lru_cache
+from . import profile_cache
+
 import requests
+import httpx
 from fastapi import Body, FastAPI, HTTPException
 from pydantic import BaseModel, Field, conint
+import asyncio
 
 # ────────────────────── FastAPI app ────────────────────────────
 app = FastAPI()
@@ -48,21 +53,60 @@ HEADERS = {
 
 session = requests.Session()
 
+async_client: Optional[httpx.AsyncClient] = None
+
+async def get_async_client() -> httpx.AsyncClient:
+    global async_client
+    if async_client is None:
+        async_client = httpx.AsyncClient(timeout=15)
+    return async_client
+
+# Async version of fetch_user_js
+async def async_fetch_user_js(identifier: str) -> Optional[Dict[str, Any]]:
+    # try cache first
+    cached = profile_cache.get(identifier)
+    if cached:
+        return cached
+    client = await get_async_client()
+    try:
+        r = await client.get(f"{API_USERS}/{identifier}", headers=HEADERS)
+        r.raise_for_status()
+        js = r.json()
+        if isinstance(js, list):
+            js = js[0] if js else None
+        elif isinstance(js, dict) and "resource" in js:
+            js = js["resource"][0] if js["resource"] else None
+        if js:
+            profile_cache.put(identifier, js)
+        return js
+    except Exception:
+        return None
+
 # ────────────────────── Pydantic models ────────────────────────
 class BaseLookupRequest(BaseModel):
     faculty_name: str = Field(..., description="Full name as it appears in Scholars@UAB")
 
 class PublicationLookupRequest(BaseLookupRequest):
     since_year: Optional[int] = Field(None, ge=1900)
+    until_year: Optional[int] = Field(None, ge=1900)
     limit:      Optional[int] = Field(None, ge=1, le=500)
+    keyword:    Optional[str] = Field(None, description="Substring match against title or abstract")
+    journal:    Optional[str] = Field(None, description="Exact journal name match (case-insensitive)")
 
 class GrantLookupRequest(BaseLookupRequest):
     since_year: Optional[int] = Field(None, ge=1900)
+    until_year: Optional[int] = Field(None, ge=1900)
     limit:      Optional[int] = Field(None, ge=1, le=500)
+    sponsor:    Optional[str] = Field(None, description="Substring match in funder")
+    role:       Optional[str] = Field(None, description="PI / Co-I role filter (case-insensitive)")
+    active_only: bool = False
 
 class TeachingLookupRequest(BaseLookupRequest):
     since_year: Optional[int] = Field(None, ge=1900)
+    until_year: Optional[int] = Field(None, ge=1900)
     limit:      Optional[int] = Field(None, ge=1, le=500)
+    keyword:    Optional[str] = Field(None, description="Substring match in activity title")
+    level:      Optional[str] = Field(None, description="graduate / undergraduate match in type field")
 
 class ResearchSearchRequest(BaseModel):
     search_term: str = Field(..., description="Substring to search for (case-insensitive)")
@@ -94,6 +138,47 @@ def clean_text(s: str) -> str:
     for a, b in subs:
         t = t.replace(a, b)
     return " ".join(t.split())
+
+# NEW ─────────────────────────────────────────────────────────
+# Combine legacy researchInterests with modern tabSummary* fields so that
+# terms appearing in either location are picked up by the research-interest
+# search endpoints.
+
+def extract_research_text(js: Dict[str, Any]) -> str:
+    """Return lowercase concatenated research-interest text for a user JSON.
+
+    Scholars@UAB recently migrated from the legacy ``researchInterests`` field
+    to a collection of ``tabSummary*`` fields.  This helper normalises both
+    representations so that downstream substring checks work regardless of the
+    exact storage key.
+    """
+    parts: List[str] = []
+
+    # 1) Legacy researchInterests (string OR list of {value|text})
+    ri_raw = js.get("researchInterests", "")
+    if isinstance(ri_raw, str):
+        parts.append(ri_raw)
+    elif isinstance(ri_raw, list):
+        parts.extend(
+            clean_text(item.get("value") or item.get("text") or "")
+            for item in ri_raw if isinstance(item, dict)
+        )
+
+    # 2) New tabSummary* JSON fields (string / dict / list)
+    for key, val in js.items():
+        if not key.startswith("tabSummary"):
+            continue
+        if isinstance(val, str):
+            parts.append(val)
+        elif isinstance(val, dict):
+            parts.append(clean_text(val.get("value") or val.get("text") or ""))
+        elif isinstance(val, list):
+            parts.extend(
+                clean_text(item.get("value") or item.get("text") or "")
+                for item in val if isinstance(item, dict)
+            )
+
+    return " ".join(parts).lower()
 
 def get_name_variations(full_name: str) -> List[tuple[str, str]]:
     parts = full_name.split()
@@ -161,15 +246,23 @@ def find_disc_id(full_name: str) -> Optional[str]:
             continue
     return None
 
+@lru_cache(maxsize=10000)
 def fetch_user_js(identifier: str) -> Optional[Dict[str, Any]]:
+    # check disk cache first
+    cached = profile_cache.get(identifier)
+    if cached is not None:
+        return cached
+
     try:
         r = session.get(f"{API_USERS}/{identifier}", headers=HEADERS, timeout=15)
         r.raise_for_status()
         js = r.json()
         if isinstance(js, list):
-            return js[0] if js else None
-        if isinstance(js, dict) and "resource" in js:
-            return js["resource"][0] if js["resource"] else None
+            js = js[0] if js else None
+        elif isinstance(js, dict) and "resource" in js:
+            js = js["resource"][0] if js["resource"] else None
+        if js:
+            profile_cache.put(identifier, js)
         return js
     except Exception:
         return None
@@ -296,7 +389,16 @@ def fetch_publications_by_name(req: PublicationLookupRequest):
     ):
         for p in page:
             flat = flatten_publication(p, str(p.get("userObjectId", "")))
-            if req.since_year and int(flat.get("pubYear") or 0) < req.since_year:
+            year = int(flat.get("pubYear") or 0)
+            if req.since_year and year < req.since_year:
+                continue
+            if req.until_year and year > req.until_year:
+                continue
+            if req.keyword:
+                combined = (flat.get("title", "") + " " + p.get("abstract", "")).lower()
+                if req.keyword.lower() not in combined:
+                    continue
+            if req.journal and flat.get("journal", "").lower() != req.journal.lower():
                 continue
             pubs.append(flat); cnt += 1
             if req.limit and cnt >= req.limit:
@@ -316,14 +418,26 @@ def fetch_grants_by_name(req: GrantLookupRequest):
     for page in fetch_all_pages(
         API_GRANTS,
         lambda s: {
-            "objectId": disc_id, "category": "user",
+            "objectId": disc_id,
+            "category": "user",
             "pagination": {"perPage": SEARCH_PAGE_SIZE, "startFrom": s},
+            "sort": "dateDesc",
+            "favouritesFirst": True,
         },
         SEARCH_PAGE_SIZE,
     ):
         for g in page:
             flat = flatten_grant(g, str(g.get("userObjectId", "")))
-            if req.since_year and int(flat.get("year") or 0) < req.since_year:
+            year = int(flat.get("year") or 0)
+            if req.since_year and year < req.since_year:
+                continue
+            if req.until_year and year > req.until_year:
+                continue
+            if req.sponsor and req.sponsor.lower() not in flat.get("funder", "").lower():
+                continue
+            if req.role and req.role.lower() not in (g.get("role", "").lower()):
+                continue
+            if req.active_only and g.get("status", "").lower() != "active":
                 continue
             grants.append(flat); cnt += 1
             if req.limit and cnt >= req.limit:
@@ -350,7 +464,14 @@ def fetch_teaching_by_name(req: TeachingLookupRequest):
     ):
         for t in page:
             flat = flatten_teaching(t, str(t.get("userObjectId", "")))
-            if req.since_year and int(flat.get("startYear") or 0) < req.since_year:
+            year = int(flat.get("startYear") or 0)
+            if req.since_year and year < req.since_year:
+                continue
+            if req.until_year and year > req.until_year:
+                continue
+            if req.keyword and req.keyword.lower() not in flat.get("title", "").lower():
+                continue
+            if req.level and req.level.lower() not in (flat.get("type", "").lower()):
                 continue
             acts.append(flat); cnt += 1
             if req.limit and cnt >= req.limit:
@@ -368,12 +489,8 @@ def search_by_research_interest(req: ResearchSearchRequest):
     while uid <= MAX_UID and len(results) < req.max_results:
         js = fetch_user_js(str(uid))
         if js:
-            raw = js.get("researchInterests", "")
-            pool = (
-                [raw] if isinstance(raw, str) else
-                [x.get("value") or x.get("text") or "" for x in raw if isinstance(x, dict)]
-            )
-            if any(term in p.lower() for p in pool):
+            joined = extract_research_text(js)
+            if term in joined:
                 results.append({
                     "objectId": js["objectId"],
                     "discoveryUrlId": js["discoveryUrlId"],
@@ -390,29 +507,73 @@ def search_by_research_interest_chunked(req: ResearchSearchChunkedRequest):
     matches: List[Dict[str, Any]] = []
     uid = req.min_id
     while uid <= req.max_id and len(matches) < req.max_results:
-        chunk_end = min(uid + req.chunk_size - 1, req.max_id)
-        for user_id in range(uid, chunk_end + 1):
-            js = fetch_user_js(str(user_id))
-            if not js:
-                continue
-            raw = js.get("researchInterests", "")
-            pool: List[str] = (
-                [raw] if isinstance(raw, str) else
-                [clean_text(x.get("value") or x.get("text") or "") for x in raw if isinstance(x, dict)]
-            )
-            joined = " ".join(pool).lower()
-            if any(t in joined for t in terms):
-                matches.append({
-                    "objectId": js["objectId"],
-                    "discoveryUrlId": js["discoveryUrlId"],
-                    "firstName": js["firstName"],
-                    "lastName": js["lastName"],
-                    "email": js.get("emailAddress", {}).get("address", ""),
-                })
+        remaining_needed = req.max_results - len(matches)
+        chunk_size      = min(req.chunk_size, remaining_needed)
+        chunk_end       = min(uid + chunk_size - 1, req.max_id)
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            fut_to_uid = {
+                pool.submit(fetch_user_js, str(i)): i
+                for i in range(uid, chunk_end + 1)
+            }
+            for fut in as_completed(fut_to_uid):
                 if len(matches) >= req.max_results:
+                    # We already have enough – cancel remaining futures.
+                    for pending in fut_to_uid:
+                        pending.cancel()
                     break
+                js = fut.result()
+                if not js:
+                    continue
+                joined = extract_research_text(js)
+                if any(t in joined for t in terms):
+                    matches.append({
+                        "objectId": js["objectId"],
+                        "discoveryUrlId": js["discoveryUrlId"],
+                        "firstName": js["firstName"],
+                        "lastName": js["lastName"],
+                        "email": js.get("emailAddress", {}).get("address", ""),
+                    })
+
         uid = chunk_end + 1
+
     return {"matches": matches, "count": len(matches)}
+
+# ─── Async research-interest search ───────────────────────────
+
+@app.post("/search_by_research_interest_async")
+async def search_by_research_interest_async(req: ResearchSearchChunkedRequest):
+    terms = [t.lower() for t in req.search_terms]
+    matches: List[Dict[str, Any]] = []
+
+    sem = asyncio.Semaphore(50)
+
+    async def worker(uid: int):
+        nonlocal matches
+        if len(matches) >= req.max_results:
+            return
+        async with sem:
+            js = await async_fetch_user_js(str(uid))
+        if not js:
+            return
+        joined = extract_research_text(js)
+        if any(t in joined for t in terms):
+            matches.append({
+                "objectId": js["objectId"],
+                "discoveryUrlId": js["discoveryUrlId"],
+                "firstName": js["firstName"],
+                "lastName": js["lastName"],
+                "email": js.get("emailAddress", {}).get("address", ""),
+            })
+
+    batch_size = req.chunk_size
+    uid = req.min_id
+    while uid <= req.max_id and len(matches) < req.max_results:
+        tasks = [worker(i) for i in range(uid, min(uid + batch_size, req.max_id + 1))]
+        await asyncio.gather(*tasks)
+        uid += batch_size
+
+    return {"matches": matches[: req.max_results], "count": len(matches)}
 
 # ─────────── Department (chunked, threaded) ───────────────────
 @app.post("/search_by_department_chunked")
