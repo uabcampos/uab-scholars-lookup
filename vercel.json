@@ -1,11 +1,5 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "api/openapi.json",
-      "use": "@vercel/static"
-    }
-  ],
   "routes": [
     {
       "src": "/openapi.json",
