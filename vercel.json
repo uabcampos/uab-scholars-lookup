@@ -8,36 +8,8 @@
   ],
   "routes": [
     {
-      "src": "/api/fetch_scholar_by_name",
-      "dest": "/api/fetch_scholar_by_name.py"
-    },
-    {
-      "src": "/api/fetch_profile_by_name",
-      "dest": "/api/fetch_profile_by_name.py"
-    },
-    {
-      "src": "/api/fetch_publications_by_name",
-      "dest": "/api/fetch_publications_by_name.py"
-    },
-    {
-      "src": "/api/fetch_grants_by_name",
-      "dest": "/api/fetch_grants_by_name.py"
-    },
-    {
-      "src": "/api/fetch_teaching_by_name",
-      "dest": "/api/fetch_teaching_by_name.py"
-    },
-    {
-      "src": "/api/search_by_research_interest",
-      "dest": "/api/search_by_research_interest.py"
-    },
-    {
-      "src": "/api/search_by_research_interest_chunked",
-      "dest": "/api/search_by_research_interest_chunked.py"
-    },
-    {
-      "src": "/api/search_by_department_chunked",
-      "dest": "/api/search_by_department_chunked.py"
+      "src": "/api/(.*)",
+      "dest": "/api/$1"
     },
     {
       "src": "/openapi.json",
