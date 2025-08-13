@@ -1,19 +1,8 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "api/requirements.txt",
-      "use": "@vercel/python"
+  "functions": {
+    "api/fetch_scholar_by_name.py": {
+      "runtime": "python3.11"
     }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/api/$1"
-    },
-    {
-      "src": "/openapi.json",
-      "dest": "api/openapi.json"
-    }
-  ]
+  }
 }
