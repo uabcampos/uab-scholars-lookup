@@ -1,5 +1,11 @@
 {
   "version": 2,
+  "builds": [
+    {
+      "src": "api/requirements.txt",
+      "use": "@vercel/python"
+    }
+  ],
   "routes": [
     {
       "src": "/api/fetch_scholar_by_name",

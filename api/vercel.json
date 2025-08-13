@@ -1,0 +1,38 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "requirements.txt",
+      "use": "@vercel/python"
+    }
+  ],
+  "functions": {
+    "fetch_scholar_by_name.py": {
+      "runtime": "python3.11"
+    },
+    "fetch_profile_by_name.py": {
+      "runtime": "python3.11"
+    },
+    "fetch_scholar.py": {
+      "runtime": "python3.11"
+    },
+    "fetch_publications_by_name.py": {
+      "runtime": "python3.11"
+    },
+    "fetch_grants_by_name.py": {
+      "runtime": "python3.11"
+    },
+    "fetch_teaching_by_name.py": {
+      "runtime": "python3.11"
+    },
+    "search_by_research_interest.py": {
+      "runtime": "python3.11"
+    },
+    "search_by_research_interest_chunked.py": {
+      "runtime": "python3.11"
+    },
+    "search_by_department_chunked.py": {
+      "runtime": "python3.11"
+    }
+  }
+}
