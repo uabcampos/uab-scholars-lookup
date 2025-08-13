@@ -1,34 +1,5 @@
 {
   "version": 2,
-  "functions": {
-    "api/fetch_scholar_by_name.py": {
-      "runtime": "python3.11"
-    },
-    "api/fetch_profile_by_name.py": {
-      "runtime": "python3.11"
-    },
-    "api/fetch_scholar.py": {
-      "runtime": "python3.11"
-    },
-    "api/fetch_publications_by_name.py": {
-      "runtime": "python3.11"
-    },
-    "api/fetch_grants_by_name.py": {
-      "runtime": "python3.11"
-    },
-    "api/fetch_teaching_by_name.py": {
-      "runtime": "python3.11"
-    },
-    "api/search_by_research_interest.py": {
-      "runtime": "python3.11"
-    },
-    "api/search_by_research_interest_chunked.py": {
-      "runtime": "python3.11"
-    },
-    "api/search_by_department_chunked.py": {
-      "runtime": "python3.11"
-    }
-  },
   "routes": [
     {
       "src": "/api/(.*)",
