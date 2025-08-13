@@ -71,6 +71,33 @@ def clean_text(s: str) -> str:
         t = t.replace(a, b)
     return " ".join(t.split())
 
+def _extract_comprehensive_bio(js: Dict[str, Any]) -> str:
+    """Extract comprehensive bio information from multiple fields."""
+    bio_parts = []
+    
+    # Primary bio from overview field
+    overview = clean_text(js.get("overview", ""))
+    if overview:
+        bio_parts.append(overview)
+    
+    # Additional bio from tabSummaryAbout field
+    tab_summary_about = js.get("tabSummaryAbout", {})
+    if isinstance(tab_summary_about, dict):
+        about_value = tab_summary_about.get("value", "")
+        if about_value:
+            bio_parts.append(clean_text(about_value))
+        else:
+            html_stripped = tab_summary_about.get("htmlStripped", "")
+            if html_stripped:
+                bio_parts.append(clean_text(html_stripped))
+    elif isinstance(tab_summary_about, str) and tab_summary_about.strip():
+        bio_parts.append(clean_text(tab_summary_about))
+    
+    # Combine all bio parts
+    if bio_parts:
+        return " ".join(bio_parts)
+    return ""
+
 def get_name_variations(full_name: str):
     parts = full_name.split()
     first, last = parts[0], parts[-1]
@@ -177,7 +204,7 @@ def handler(request):
             "orcid":          js.get("orcid", {}).get("value", js.get("orcid", "")),
             "department": "; ".join(p["department"].strip() for p in js.get("positions", []) if p.get("department")),
             "positions":  "; ".join(p["position"].strip() for p in js.get("positions", []) if p.get("position")),
-            "bio":               clean_text(js.get("overview", "")),
+            "bio":               _extract_comprehensive_bio(js),
             "researchInterests": extract_ri(js.get("researchInterests", "")),
             "teachingSummary":   clean_text(js.get("teachingSummary", "")),
         }

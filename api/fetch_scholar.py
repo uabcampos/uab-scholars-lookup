@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 from functools import lru_cache
-from . import profile_cache
+import profile_cache
 
 import requests
 import httpx
@@ -138,6 +138,33 @@ def clean_text(s: str) -> str:
     for a, b in subs:
         t = t.replace(a, b)
     return " ".join(t.split())
+
+def _extract_comprehensive_bio(js: Dict[str, Any]) -> str:
+    """Extract comprehensive bio information from multiple fields."""
+    bio_parts = []
+    
+    # Primary bio from overview field
+    overview = clean_text(js.get("overview", ""))
+    if overview:
+        bio_parts.append(overview)
+    
+    # Additional bio from tabSummaryAbout field
+    tab_summary_about = js.get("tabSummaryAbout", {})
+    if isinstance(tab_summary_about, dict):
+        about_value = tab_summary_about.get("value", "")
+        if about_value:
+            bio_parts.append(clean_text(about_value))
+        else:
+            html_stripped = tab_summary_about.get("htmlStripped", "")
+            if html_stripped:
+                bio_parts.append(clean_text(html_stripped))
+    elif isinstance(tab_summary_about, str) and tab_summary_about.strip():
+        bio_parts.append(clean_text(tab_summary_about))
+    
+    # Combine all bio parts
+    if bio_parts:
+        return " ".join(bio_parts)
+    return ""
 
 # NEW ─────────────────────────────────────────────────────────
 # Combine legacy researchInterests with modern tabSummary* fields so that
@@ -364,7 +391,7 @@ def fetch_profile_by_name(req: BaseLookupRequest):
         "orcid":          js.get("orcid", {}).get("value", js.get("orcid", "")),
         "department": "; ".join(p["department"].strip() for p in js.get("positions", []) if p.get("department")),
         "positions":  "; ".join(p["position"].strip() for p in js.get("positions", []) if p.get("position")),
-        "bio":               clean_text(js.get("overview", "")),
+        "bio":               _extract_comprehensive_bio(js),
         "researchInterests": extract_ri(js.get("researchInterests", "")),
         "teachingSummary":   clean_text(js.get("teachingSummary", "")),
     }
@@ -641,7 +668,7 @@ def fetch_scholar_by_name(req: BaseLookupRequest):
         "email": js.get("emailAddress", {}).get("address", ""),
         "department": "; ".join(p["department"].strip() for p in js.get("positions", []) if p.get("department")),
         "positions":  "; ".join(p["position"].strip() for p in js.get("positions", []) if p.get("position")),
-        "bio": clean_text(js.get("overview", "")),
+        "bio": _extract_comprehensive_bio(js),
         "researchInterests": (
             clean_text(js.get("researchInterests", ""))
             if isinstance(js.get("researchInterests"), str)
@@ -689,3 +716,7 @@ def fetch_scholar_by_name(req: BaseLookupRequest):
         ), flatten_teaching)
 
     return {"profile": profile, "publications": pubs, "grants": grants, "teaching": teaching}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
