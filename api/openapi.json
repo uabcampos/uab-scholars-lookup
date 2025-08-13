@@ -1,0 +1,619 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "UAB Scholars Lookup API",
+    "version": "1.0.0",
+    "description": "Read-only helper endpoints for public data in Scholars@UAB. Enhanced bio extraction combines overview and tabSummaryAbout fields for comprehensive faculty information.",
+    "x-features": {
+      "enhancedBio": "Combines overview and tabSummaryAbout fields for comprehensive faculty biographies",
+      "comprehensiveData": "Provides publications, grants, and teaching activities alongside profile information"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://uab-scholars-lookup-asnht8ycy-chris-projects-4a1c6560.vercel.app"
+    }
+  ],
+  "paths": {
+    "/fetch_profile_by_name": {
+      "post": {
+        "operationId": "fetchProfileByName",
+        "summary": "Return core profile details with enhanced bio (overview + tabSummaryAbout)",
+        "x-openai-isConsequential": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BaseLookupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/fetch_publications_by_name": {
+      "post": {
+        "operationId": "fetchPublicationsByName",
+        "summary": "Return publications (optionally filtered)",
+        "x-openai-isConsequential": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicationLookupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Publications",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicationsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/fetch_grants_by_name": {
+      "post": {
+        "operationId": "fetchGrantsByName",
+        "summary": "Return grants (optionally filtered)",
+        "x-openai-isConsequential": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantLookupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/fetch_teaching_by_name": {
+      "post": {
+        "operationId": "fetchTeachingByName",
+        "summary": "Return teaching activities (optionally filtered)",
+        "x-openai-isConsequential": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeachingLookupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Teaching activities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeachingResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search_by_research_interest": {
+      "post": {
+        "operationId": "searchByResearchInterest",
+        "summary": "Quick scan for research-interest substring (≤ MAX_UID)",
+        "x-openai-isConsequential": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchSearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Matches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search_by_research_interest_chunked": {
+      "post": {
+        "operationId": "searchByResearchInterestChunked",
+        "summary": "Chunked and validated research-interest scan",
+        "x-openai-isConsequential": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchChunkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Matches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchesCountResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search_by_department_chunked": {
+      "post": {
+        "operationId": "searchByDepartmentChunked",
+        "summary": "Threaded and chunked department and role keyword scan",
+        "x-openai-isConsequential": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepartmentSearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Matches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchesCountResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/fetch_scholar_by_name": {
+      "post": {
+        "operationId": "fetchScholarByName",
+        "summary": "Snapshot with enhanced profile (including comprehensive bio from overview + tabSummaryAbout) plus first 50 publications, grants and teaching",
+        "x-openai-isConsequential": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BaseLookupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnapshotResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BaseLookupRequest": {
+        "type": "object",
+        "required": [
+          "faculty_name"
+        ],
+        "properties": {
+          "faculty_name": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicationLookupRequest": {
+        "type": "object",
+        "required": [
+          "faculty_name"
+        ],
+        "properties": {
+          "faculty_name": {
+            "type": "string"
+          },
+          "since_year": {
+            "type": "integer",
+            "minimum": 1900
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        }
+      },
+      "GrantLookupRequest": {
+        "type": "object",
+        "required": [
+          "faculty_name"
+        ],
+        "properties": {
+          "faculty_name": {
+            "type": "string"
+          },
+          "since_year": {
+            "type": "integer",
+            "minimum": 1900
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        }
+      },
+      "TeachingLookupRequest": {
+        "type": "object",
+        "required": [
+          "faculty_name"
+        ],
+        "properties": {
+          "faculty_name": {
+            "type": "string"
+          },
+          "since_year": {
+            "type": "integer",
+            "minimum": 1900
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        }
+      },
+      "ResearchSearchRequest": {
+        "type": "object",
+        "required": [
+          "search_term"
+        ],
+        "properties": {
+          "search_term": {
+            "type": "string"
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        }
+      },
+      "ResearchChunkRequest": {
+        "type": "object",
+        "required": [
+          "search_terms"
+        ],
+        "properties": {
+          "search_terms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "chunk_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "min_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        }
+      },
+      "DepartmentSearchRequest": {
+        "type": "object",
+        "required": [
+          "department"
+        ],
+        "properties": {
+          "department": {
+            "type": "string"
+          },
+          "related_terms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "role_keywords": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          }
+        }
+      },
+      "Profile": {
+        "type": "object",
+        "properties": {
+          "objectId": {
+            "type": "integer"
+          },
+          "discoveryUrlId": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "lastName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "orcid": {
+            "type": "string"
+          },
+          "department": {
+            "type": "string"
+          },
+          "positions": {
+            "type": "string"
+          },
+          "bio": {
+            "type": "string",
+            "description": "Comprehensive biography combining overview and tabSummaryAbout fields for enhanced faculty information"
+          },
+          "researchInterests": {
+            "type": "string"
+          },
+          "teachingSummary": {
+            "type": "string"
+          }
+        }
+      },
+      "Publication": {
+        "type": "object",
+        "properties": {
+          "publicationObjectId": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "journal": {
+            "type": "string"
+          },
+          "doi": {
+            "type": "string"
+          },
+          "pubYear": {
+            "type": "integer"
+          }
+        }
+      },
+      "Grant": {
+        "type": "object",
+        "properties": {
+          "grantObjectId": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "funder": {
+            "type": "string"
+          },
+          "awardType": {
+            "type": "string"
+          },
+          "year": {
+            "type": "integer"
+          }
+        }
+      },
+      "TeachingActivity": {
+        "type": "object",
+        "properties": {
+          "teachingActivityObjectId": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          },
+          "startYear": {
+            "type": "integer"
+          },
+          "endYear": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "ProfileResponse": {
+        "type": "object",
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/Profile"
+          }
+        },
+        "required": [
+          "profile"
+        ]
+      },
+      "PublicationsResponse": {
+        "type": "object",
+        "properties": {
+          "publications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Publication"
+            }
+          }
+        },
+        "required": [
+          "publications"
+        ]
+      },
+      "GrantsResponse": {
+        "type": "object",
+        "properties": {
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Grant"
+            }
+          }
+        },
+        "required": [
+          "grants"
+        ]
+      },
+      "TeachingResponse": {
+        "type": "object",
+        "properties": {
+          "teaching": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeachingActivity"
+            }
+          }
+        },
+        "required": [
+          "teaching"
+        ]
+      },
+      "MatchesResponse": {
+        "type": "object",
+        "properties": {
+          "matches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Profile"
+            }
+          }
+        },
+        "required": [
+          "matches"
+        ]
+      },
+      "MatchesCountResponse": {
+        "type": "object",
+        "properties": {
+          "matches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Profile"
+            }
+          },
+          "count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "matches",
+          "count"
+        ]
+      },
+      "SnapshotResponse": {
+        "type": "object",
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/Profile"
+          },
+          "publications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Publication"
+            }
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Grant"
+            }
+          },
+          "teaching": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeachingActivity"
+            }
+          }
+        },
+        "required": [
+          "profile",
+          "publications",
+          "grants",
+          "teaching"
+        ]
+      }
+    }
+  }
+}
