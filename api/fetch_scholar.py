@@ -18,13 +18,25 @@ Endpoints
 from __future__ import annotations
 
 import time
-import unicodedata
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
 import requests
 from fastapi import Body, FastAPI, HTTPException
 from pydantic import BaseModel, Field, conint
+
+# Import shared utilities
+try:
+    from uab_scholars.utils import clean_text, get_name_variations
+except ImportError:
+    from sys import path as sys_path
+    sys_path.insert(0, "../src")
+    from uab_scholars.utils import clean_text, get_name_variations
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ────────────────────── FastAPI app ────────────────────────────
 app = FastAPI()
@@ -82,66 +94,17 @@ class ResearchSearchChunkedRequest(BaseModel):
     max_results: conint(ge=1, le=5000) = 1000
 
 # ────────────────────── Helper functions ───────────────────────
-def clean_text(s: str) -> str:
-    if not isinstance(s, str):
-        return ""
-    t = unicodedata.normalize("NFKC", s).replace("‚Äì", "-")
-    subs = [
-        ("\u2013", "-"), ("\u2014", "-"),
-        ("\u201c", '"'), ("\u201d", '"'),
-        ("\u2018", "'"), ("\u2019", "'"),
-    ]
-    for a, b in subs:
-        t = t.replace(a, b)
-    return " ".join(t.split())
-
-def get_name_variations(full_name: str) -> List[tuple[str, str]]:
-    parts = full_name.split()
-    first, last = parts[0], parts[-1]
-    variations: List[tuple[str, str]] = [(first, last)]
-
-    name_map = {
-        "Jim": "James J.",
-        "Kristen Allen-Watts": "Kristen Allen Watts",
-        "Alex": "Alexander",
-        "RJ": "Reaford J.",
-        "Bill": "William L.",
-        "Stan": "F. Stanford",
-        "Matt": "Matthew",
-        "Robert": "Robert A.",
-        "Terry": "Terrence M.",
-        "Ben": "Benjamin",
-        "Yu-Mei": "Yu Mei",
-    }
-    if full_name in name_map:
-        alt = name_map[full_name].split()
-        variations.append((alt[0], alt[-1]))
-        if len(alt) > 2:
-            variations.append((f"{alt[0]} {alt[1]}", alt[-1]))
-
-    if "-" in full_name:
-        nh = full_name.replace("-", " ").split()
-        variations.append((nh[0], nh[-1]))
-        if len(nh) > 2:
-            variations.append((nh[0], f"{nh[-2]} {nh[-1]}"))
-
-    if "Jr" in last or "Sr" in last:
-        base = last.replace("Jr", "").replace("Sr", "").strip()
-        variations += [(first, base), (first, f"{base}, Jr."), (first, f"{base}, Sr.")]
-        if len(parts) > 2:
-            mid = parts[1]
-            variations += [
-                (f"{first} {mid}", base),
-                (f"{first} {mid}", f"{base}, Jr."),
-                (f"{first} {mid}", f"{base}, Sr."),
-            ]
-
-    if len(parts) > 2 and len(parts[-2]) == 1:
-        variations.append((f"{first} {parts[-2]}", last))
-
-    return variations
+# clean_text and get_name_variations are imported from uab_scholars.utils
 
 def find_disc_id(full_name: str) -> Optional[str]:
+    """Find the discovery ID for a scholar by robust name matching.
+    
+    Args:
+        full_name: The full name to search for
+        
+    Returns:
+        The discovery ID if found, None otherwise
+    """
     for first, last in get_name_variations(full_name):
         try:
             payload = {
@@ -150,18 +113,34 @@ def find_disc_id(full_name: str) -> Optional[str]:
             }
             r = session.post(API_USERS, json=payload, headers=HEADERS, timeout=15)
             r.raise_for_status()
-            for u in r.json().get("resource", []):
+            data = r.json()
+            for u in data.get("resource", []):
                 fn, ln = u.get("firstName", "").lower(), u.get("lastName", "").lower()
                 if (fn == first.lower() and ln == last.lower()) or (
                     ln == last.lower() and (fn.startswith(first.lower()) or first.lower().startswith(fn))
                 ):
                     # API now prefers numeric discoveryId for follow-up endpoints
                     return str(u.get("discoveryId") or u.get("objectId"))
-        except Exception:
+        except requests.exceptions.Timeout:
+            logger.warning(f"Timeout searching for name variation: {first} {last}")
+            continue
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Request error searching for {first} {last}: {e}")
+            continue
+        except (ValueError, KeyError) as e:
+            logger.error(f"Parse error for {first} {last}: {e}")
             continue
     return None
 
 def fetch_user_js(identifier: str) -> Optional[Dict[str, Any]]:
+    """Fetch user profile data by identifier.
+    
+    Args:
+        identifier: User ID or discovery URL ID
+        
+    Returns:
+        User profile dict or None if not found/error
+    """
     try:
         r = session.get(f"{API_USERS}/{identifier}", headers=HEADERS, timeout=15)
         r.raise_for_status()
@@ -171,7 +150,18 @@ def fetch_user_js(identifier: str) -> Optional[Dict[str, Any]]:
         if isinstance(js, dict) and "resource" in js:
             return js["resource"][0] if js["resource"] else None
         return js
-    except Exception:
+    except requests.exceptions.Timeout:
+        logger.warning(f"Timeout fetching user {identifier}")
+        return None
+    except requests.exceptions.HTTPError as e:
+        logger.warning(f"HTTP error fetching user {identifier}: {e}")
+        return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request error fetching user {identifier}: {e}")
+        return None
+    except ValueError as e:
+        logger.error(f"JSON parse error for user {identifier}: {e}")
+        return None
         return None
 
 def fetch_all_pages(url: str, payload_fn, per_page: int):

@@ -105,6 +105,66 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pydantic import BaseModel, Field
 import scholars_api_shim  # noqa: F401
 
+# Import shared utilities from the package (with fallback for standalone use)
+try:
+    from uab_scholars.utils import clean_text, get_name_variations, slugify
+except ImportError:
+    # Fallback: define locally if package import fails (e.g., running from repo root)
+    import unicodedata
+    import re
+    from typing import List, Tuple
+    
+    def clean_text(s: str) -> str:
+        if not isinstance(s, str):
+            return ""
+        t = unicodedata.normalize("NFKC", s).replace("‚Äì", "-")
+        for orig, repl in [
+            ("\u2013", "-"), ("\u2014", "-"),
+            ("\u201C", '"'), ("\u201D", '"'),
+            ("\u2018", "'"), ("\u2019", "'"),
+        ]:
+            t = t.replace(orig, repl)
+        return " ".join(t.split())
+    
+    _COMMON_NAME_MAP = {
+        "Jim": "James J.", "Kristen Allen-Watts": "Kristen Allen Watts",
+        "Alex": "Alexander", "RJ": "Reaford J.", "Bill": "William L.",
+        "Stan": "F. Stanford", "Matt": "Matthew", "Robert": "Robert A.",
+        "Terry": "Terrence M.", "Ben": "Benjamin", "Yu-Mei": "Yu Mei",
+    }
+    
+    def get_name_variations(full_name: str) -> List[Tuple[str, str]]:
+        parts = full_name.split()
+        if not parts:
+            return []
+        first, last = parts[0], parts[-1]
+        variations = [(first, last)]
+        if full_name in _COMMON_NAME_MAP:
+            alt = _COMMON_NAME_MAP[full_name].split()
+            if len(alt) > 1:
+                variations.append((alt[0], alt[-1]))
+                if len(alt) > 2:
+                    variations.append((f"{alt[0]} {alt[1]}", alt[-1]))
+        if "-" in full_name:
+            nh = full_name.replace("-", " ").split()
+            variations.append((nh[0], nh[-1]))
+            if len(nh) > 2:
+                variations.append((nh[0], f"{nh[-2]} {nh[-1]}"))
+        if "Jr" in last or "Sr" in last:
+            base = last.replace("Jr", "").replace("Sr", "").strip()
+            variations += [(first, base), (first, f"{base}, Jr."), (first, f"{base}, Sr.")]
+            if len(parts) > 2:
+                variations += [(f"{first} {parts[1]}", base), (f"{first} {parts[1]}", f"{base}, Jr.")]
+        if len(parts) > 2 and len(parts[-2]) == 1:
+            variations.append((f"{first} {parts[-2]}", last))
+        return variations
+    
+    def slugify(text: str) -> str:
+        text = unicodedata.normalize("NFKD", text.lower()).encode("ascii", "ignore").decode()
+        text = re.sub(r"[^a-z0-9\s-]", "", text)
+        text = re.sub(r"\s+", "-", text)
+        return re.sub(r"-{2,}", "-", text).strip("-")
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Top-level tool class
@@ -128,19 +188,19 @@ class Tools:
         }
 
     # ───────────────────────────────────────────────────────────────────── Helpers
-    def clean_text(self, s: str) -> str:
-        """Unicode-normalise, fix “smart quotes”, collapse whitespace."""
-        if not isinstance(s, str):
-            return ""
-        t = unicodedata.normalize("NFKC", s).replace("‚Äì", "-")
-        for orig, repl in [
-            ("\u2013", "-"),  # en-dash
-            ("\u2014", "-"),  # em-dash
-            ("\u201C", '"'), ("\u201D", '"'),  # left/right double quotes
-            ("\u2018", "'"), ("\u2019", "'"),  # left/right single quotes
-        ]:
-            t = t.replace(orig, repl)
-        return " ".join(t.split())
+    # Use imported clean_text and get_name_variations from uab_scholars.utils
+    
+    def _clean_text(self, s: str) -> str:
+        """Wrapper to use shared clean_text utility."""
+        return clean_text(s)
+    
+    def _get_name_variations(self, full_name: str) -> list:
+        """Wrapper to use shared get_name_variations utility."""
+        return get_name_variations(full_name)
+    
+    def _slugify(self, text: str) -> str:
+        """Wrapper to use shared slugify utility."""
+        return slugify(text)
 
     async def _emit_status(
         self,
@@ -169,55 +229,14 @@ class Tools:
                     "data": {
                         "document": [f"UAB Scholar: {name}", bio],
                         "metadata": [{"source": url}],
-                        "source": {"name": f"UAB Scholars – {name}"},
+                        "source": {"name": f"UAB Scholars - {name}"},
                     },
                 }
             )
 
     def get_name_variations(self, full_name: str) -> list:
-        parts = full_name.split()
-        first, last = parts[0], parts[-1]
-        variations = [(first, last)]
-        name_map = {
-            "Jim": "James J.",
-            "Kristen Allen-Watts": "Kristen Allen Watts",
-            "Alex": "Alexander",
-            "RJ": "Reaford J.",
-            "Bill": "William L.",
-            "Stan": "F. Stanford",
-            "Matt": "Matthew",
-            "Robert": "Robert A.",
-            "Terry": "Terrence M.",
-            "Ben": "Benjamin",
-            "Yu-Mei": "Yu Mei"
-        }
-        if full_name in name_map:
-            alt_name = name_map[full_name]
-            alt_parts = alt_name.split()
-            if len(alt_parts) > 1:
-                variations.append((alt_parts[0], alt_parts[-1]))
-                if len(alt_parts) > 2:
-                    variations.append((f"{alt_parts[0]} {alt_parts[1]}", alt_parts[-1]))
-            else:
-                variations.append((alt_name, last))
-        if "-" in full_name:
-            no_hyphen = full_name.replace("-", " ")
-            no_hyphen_parts = no_hyphen.split()
-            variations.append((no_hyphen_parts[0], no_hyphen_parts[-1]))
-            if len(no_hyphen_parts) > 2:
-                variations.append((no_hyphen_parts[0], f"{no_hyphen_parts[-2]} {no_hyphen_parts[-1]}"))
-        if "Jr" in last or "Sr" in last:
-            base_last = last.replace("Jr", "").replace("Sr", "").strip()
-            variations.append((first, base_last))
-            variations.append((first, f"{base_last}, Jr."))
-            variations.append((first, f"{base_last}, Sr."))
-            if len(parts) > 2:
-                variations.append((f"{first} {parts[1]}", base_last))
-                variations.append((f"{first} {parts[1]}", f"{base_last}, Jr."))
-                variations.append((f"{first} {parts[1]}", f"{base_last}, Sr."))
-        if len(parts) > 2 and len(parts[-2]) == 1:
-            variations.append((f"{first} {parts[-2]}", last))
-        return variations
+        """Get name variations - delegates to shared utility."""
+        return self._get_name_variations(full_name)
 
     def find_disc_id(self, full_name: str) -> tuple:
         """
@@ -233,11 +252,11 @@ class Tools:
             "tried_variations": [],
             "api_responses": []
         }
-        
+
         for first, last in variations:
             search_query = f"{first} {last}"
             search_details["tried_variations"].append(search_query)
-            
+
             payload = {
                 "params": {"by": "text", "category": "user", "text": search_query},
                 "pagination": {"startFrom": 0, "perPage": 25},
@@ -246,7 +265,7 @@ class Tools:
                 r = requests.post(f"{self.base_url}/users", json=payload, headers=self.headers, timeout=15)
                 r.raise_for_status()
                 response_data = r.json()
-                
+
                 # Record API response for debugging
                 api_response = {
                     "query": search_query,
@@ -254,7 +273,7 @@ class Tools:
                     "total_results": response_data.get("pagination", {}).get("total", 0),
                     "matches": []
                 }
-                
+
                 for u in response_data.get("resource", []):
                     match_info = {
                         "firstName": u.get("firstName", ""),
@@ -264,13 +283,13 @@ class Tools:
                         "hasPublications": bool(u.get("publications"))
                     }
                     api_response["matches"].append(match_info)
-                    
+
                     # Exact match
                     if (u.get("firstName", "").lower() == first.lower() and
                         u.get("lastName", "").lower() == last.lower()):
                         search_details["api_responses"].append(api_response)
                         return str(u.get("discoveryId") or u.get("objectId")), search_details
-                    
+
                     # Partial match (e.g., first initial, middle name, etc.)
                     if (u.get("lastName", "").lower() == last.lower() and
                         (u.get("firstName", "").lower().startswith(first.lower()) or
@@ -282,30 +301,21 @@ class Tools:
                         if score > best_profile_score:
                             best_profile_score = score
                             best_match = str(u.get("discoveryId") or u.get("objectId"))
-                
+
                 search_details["api_responses"].append(api_response)
-                
+
             except Exception as e:
                 search_details["api_responses"].append({
                     "query": search_query,
                     "error": str(e)
                 })
                 continue
-                
+
         return best_match, search_details
 
     def slugify(self, text: str) -> str:
-        """Convert text to URL‑safe slug."""
-        # Convert to lowercase and normalize unicode
-        text = unicodedata.normalize("NFKD", text.lower())
-        # Remove special characters, keep alphanumerics, whitespace and hyphens
-        text = re.sub(r"[^a-z0-9\s-]", "", text)
-        # Collapse contiguous whitespace into single hyphens
-        text = re.sub(r"\s+", "-", text)
-        # Collapse multiple hyphens
-        text = re.sub(r"-{2,}", "-", text)
-        # Trim leading/trailing hyphens
-        return text.strip("-")
+        """Convert text to URL-safe slug - delegates to shared utility."""
+        return self._slugify(text)
 
     async def search_scholars(
         self, query: str, department: str = "", __event_emitter__=None
@@ -338,13 +348,13 @@ class Tools:
                 },
                 "results": []
             })
-            
+
         try:
             profile_url = f"{self.base_url}/users/{disc_id}"
             response = requests.get(profile_url, headers=self.headers, timeout=15)
             response.raise_for_status()
             profile_data = response.json()
-            
+
             if department:
                 positions = profile_data.get("positions", [])
                 dept_match = any(
@@ -373,7 +383,7 @@ class Tools:
                         },
                         "results": []
                     })
-            
+
             publications = []
             if self.valves.include_publications:
                 publications = await self._get_publications(disc_id, __event_emitter__)
@@ -383,15 +393,15 @@ class Tools:
             teaching = []
             if self.valves.include_teaching:
                 teaching = await self._get_teaching_activities(disc_id, __event_emitter__)
-            
+
             name = f"{profile_data.get('firstName', '')} {profile_data.get('lastName', '')}".strip()
             positions = profile_data.get("positions", [])
             department = next((p.get("department", "") for p in positions if p.get("department")), "N/A")
             position = next((p.get("position", "") for p in positions if p.get("position")), "N/A")
-            
+
             # Get teaching interests from profile
             teaching_interests = profile_data.get("teachingSummary", "")
-            
+
             formatted_pubs = []
             for pub in publications[:3]:
                 pub_data = {
@@ -403,7 +413,7 @@ class Tools:
                 if pub.get("url"):
                     pub_data["url"] = pub["url"]
                 formatted_pubs.append(pub_data)
-            
+
             profile_url = f"https://scholars.uab.edu/{profile_data.get('discoveryUrlId', disc_id)}"
             scholar_data = {
                 "object": "scholar_search_results",
@@ -452,7 +462,7 @@ class Tools:
                 },
                 "results": []
             })
-        
+
         await self._emit_status(
             f"Found {len(results)} matching scholars",
             status="complete",
@@ -473,7 +483,7 @@ class Tools:
         Retrieve a specific scholar's profile by ID.
         """
         await self._emit_status(f"Retrieving UAB scholar with ID: {scholar_id}", __event_emitter__=__event_emitter__)
-        
+
         try:
             # Determine if input is numeric ID or discovery URL ID
             if scholar_id.isdigit():
@@ -492,10 +502,10 @@ class Tools:
                 response.raise_for_status()
                 data = response.json()
                 scholars = data.get("resource", [])
-                
+
                 if not scholars:
                     raise ValueError(f"No scholar found with ID: {scholar_id}")
-                
+
                 numeric_id = scholars[0].get("objectId")
                 profile_data = await self._get_scholar_profile(numeric_id, __event_emitter__)
             # Get publications if requested
@@ -555,17 +565,17 @@ class Tools:
     ) -> str:
         """
         Search for all scholars in a specific department using the API.
-        
+
         :param department: The department name or substring to search for.
         :return: JSON string containing scholar profiles (list of dicts), or a list with a single dict with an 'error' key.
         """
         await self._emit_status(f"Searching for scholars in department: {department}", __event_emitter__=__event_emitter__)
-        
+
         search_url = f"{self.base_url}/users"
         results = []
         start = 0
         per_page = 100
-        
+
         while True:
             search_payload = {
                 "params": {"by": "text", "category": "user", "text": department},
@@ -675,12 +685,12 @@ class Tools:
     async def _get_scholar_profile(self, scholar_id: int, __event_emitter__=None) -> Dict:
         """Get and process a scholar's full profile."""
         await self._emit_status(f"Retrieving profile for scholar ID: {scholar_id}", __event_emitter__=__event_emitter__)
-        
+
         profile_url = f"{self.base_url}/users/{scholar_id}"
         response = requests.get(profile_url, headers=self.headers)
         response.raise_for_status()
         js = response.json()
-        
+
         # Extract profile information
         email = js.get("emailAddress", {}).get("address", "")
         orcid = js.get("orcid", "") or ""
@@ -693,21 +703,21 @@ class Tools:
                 titles.append(appt["position"])
 
         # clean bio and teaching summary
-        bio_clean = self.clean_text(js.get("overview", "").replace("\n", " "))
-        teach_clean = self.clean_text(js.get("teachingSummary", "").replace("\n", " "))
+        bio_clean = self._clean_text(js.get("overview", "").replace("\n", " "))
+        teach_clean = self._clean_text(js.get("teachingSummary", "").replace("\n", " "))
 
         # research interests
         raw_ri = js.get("researchInterests", "")
         research = []
         if isinstance(raw_ri, str) and raw_ri.strip():
-            research.append(self.clean_text(raw_ri))
+            research.append(self._clean_text(raw_ri))
         elif isinstance(raw_ri, list):
             for item in raw_ri:
                 if isinstance(item, str):
-                    research.append(self.clean_text(item))
+                    research.append(self._clean_text(item))
                 elif isinstance(item, dict):
                     v = item.get("value") or item.get("text") or item.get("description") or ""
-                    research.append(self.clean_text(v))
+                    research.append(self._clean_text(v))
 
         return {
             "objectId": js.get("objectId", ""),
@@ -727,12 +737,12 @@ class Tools:
 
     async def _get_publications(self, disc_url_id: str, __event_emitter__=None) -> List[Dict]:
         await self._emit_status(f"Retrieving publications for {disc_url_id}", __event_emitter__=__event_emitter__)
-        
+
         pubs_url = f"{self.base_url}/publications/linkedTo"
         publications = []
         start = 0
         per_page = 25
-        
+
         while True:
             payload = {
                 "objectId": disc_url_id,
@@ -741,30 +751,30 @@ class Tools:
                 "favouritesFirst": True,
                 "sort": "dateDesc"
             }
-            
+
             response = requests.post(pubs_url, json=payload, headers=self.headers)
             response.raise_for_status()
             data = response.json()
-            
+
             results = data.get("resource", [])
             if not results:
                 break
-                
+
             for pub in results:
                 authors = "; ".join(a.get("fullName","") for a in pub.get("authors",[]))
                 labels = "; ".join(lbl.get("value","") for lbl in pub.get("labels",[]))
                 pd = pub.get("publicationDate", {})
-                
+
                 # Get the publication URL from the API response
                 pub_url = None
                 if pub.get("url"):
                     pub_url = pub["url"]
                 elif pub.get("doi"):
                     pub_url = f"https://doi.org/{pub['doi']}"
-                
+
                 publications.append({
                     "publicationObjectId": pub.get("objectId",""),
-                    "title": self.clean_text(pub.get("title","")),
+                    "title": self._clean_text(pub.get("title","")),
                     "journal": pub.get("journal",""),
                     "doi": pub.get("doi",""),
                     "url": pub_url,  # Use the URL from API or constructed DOI URL
@@ -778,26 +788,26 @@ class Tools:
                     "labels": labels,
                     "authors": authors,
                 })
-                
+
             total = data.get("pagination",{}).get("total", 0)
             start += per_page
             if start >= total:
                 break
-                
+
             time.sleep(0.1)  # Small pause between requests
-            
+
         await self._emit_status(f"Retrieved {len(publications)} publications", __event_emitter__=__event_emitter__)
         return publications
 
     async def _get_grants(self, disc_url_id: str, __event_emitter__=None) -> List[Dict]:
         """Get a scholar's grants."""
         await self._emit_status(f"Retrieving grants for {disc_url_id}", __event_emitter__=__event_emitter__)
-        
+
         grants_url = f"{self.base_url}/grants/linkedTo"
         grants = []
         start = 0
         per_page = 25
-        
+
         while True:
             payload = {
                 "objectId": disc_url_id,
@@ -806,24 +816,24 @@ class Tools:
                 "favouritesFirst": True,
                 "sort": "dateDesc"
             }
-            
+
             try:
                 response = requests.post(grants_url, json=payload, headers=self.headers, timeout=15)
                 response.raise_for_status()
                 data = response.json()
-                
+
                 # Try both "items" and "resource" keys as the API might use either
                 results = data.get("items", []) or data.get("resource", [])
                 if not results:
                     break
-                    
+
                 for grant in results:
                     d = grant.get("date1", {})
                     labels = "; ".join(lbl.get("value","") for lbl in grant.get("labels",[]))
-                    
+
                     grants.append({
                         "grantObjectId": grant.get("objectId",""),
-                        "title": self.clean_text(grant.get("title","")),
+                        "title": self._clean_text(grant.get("title","")),
                         "funder": grant.get("funderName",""),
                         "awardType": grant.get("objectTypeDisplayName",""),
                         "year": d.get("year",""),
@@ -831,14 +841,14 @@ class Tools:
                         "day": d.get("day",""),
                         "labels": labels,
                     })
-                    
+
                 total = data.get("pagination",{}).get("total", 0)
                 start += per_page
                 if start >= total:
                     break
-                    
+
                 time.sleep(0.1)  # Small pause between requests
-                
+
             except requests.exceptions.RequestException as e:
                 await self._emit_status(
                     f"Error retrieving grants: {str(e)}",
@@ -846,7 +856,7 @@ class Tools:
                     __event_emitter__=__event_emitter__
                 )
                 break
-            
+
         await self._emit_status(f"Retrieved {len(grants)} grants", __event_emitter__=__event_emitter__)
         return grants
 
@@ -855,35 +865,35 @@ class Tools:
         Get teaching activities for a scholar.
         """
         await self._emit_status(f"Retrieving teaching activities for {disc_url_id}", __event_emitter__=__event_emitter__)
-        
+
         teaching_url = f"{self.base_url}/teachingActivities/linkedTo"
         activities = []
         start = 0
         per_page = 50
-        
+
         while True:
             payload = {
                 "objectId": disc_url_id,
                 "category": "user",
                 "pagination": {"perPage": per_page, "startFrom": start}
             }
-            
+
             try:
                 response = requests.post(teaching_url, json=payload, headers=self.headers, timeout=15)
                 response.raise_for_status()
                 data = response.json()
-                
+
                 results = data.get("resource", [])
                 if not results:
                     break
-                    
+
                 for act in results:
                     d1 = act.get("date1", {})
                     d2 = act.get("date2", {})
                     activities.append({
                         "teachingActivityObjectId": act.get("objectId", ""),
                         "object": act.get("objectTypeDisplayName", ""),
-                        "title": self.clean_text(act.get("title", "")),
+                        "title": self._clean_text(act.get("title", "")),
                         "startYear": d1.get("year", ""),
                         "startMonth": d1.get("month", ""),
                         "startDay": d1.get("day", ""),
@@ -891,14 +901,14 @@ class Tools:
                         "endMonth": d2.get("month", ""),
                         "endDay": d2.get("day", "")
                     })
-                    
+
                 total = data.get("pagination", {}).get("total", 0)
                 start += per_page
                 if start >= total:
                     break
-                    
+
                 time.sleep(0.1)  # Small pause between requests
-                
+
             except Exception as e:
                 await self._emit_status(
                     f"Error retrieving teaching activities: {str(e)}",
@@ -906,7 +916,7 @@ class Tools:
                     __event_emitter__=__event_emitter__
                 )
                 break
-                
+
         await self._emit_status(f"Retrieved {len(activities)} teaching activities", __event_emitter__=__event_emitter__)
         return activities
 
@@ -915,7 +925,7 @@ class Tools:
         Count the number of unique faculty in the specified department.
         Optionally return a list of faculty members with their details.
         Uses concurrent requests to speed up the process.
-        
+
         :param department: The department name to search for
         :param return_list: If True, returns a list of faculty members instead of just the count
         :return: Either the count (int) or a list of faculty members (List[Dict])
@@ -924,7 +934,7 @@ class Tools:
         faculty_list = []
         max_id = 6000  # Upper bound on numeric user IDs
         workers = 20   # Number of concurrent threads
-        
+
         def fetch_and_filter(uid: int) -> Optional[Dict]:
             """Fetch and filter a single user profile."""
             try:
@@ -932,28 +942,28 @@ class Tools:
                 response = requests.get(profile_url, headers=self.headers, timeout=15)
                 if response.status_code != 200:
                     return None
-                    
+
                 profile_data = response.json()
-                
+
                 # Check if any position matches the department
                 positions = profile_data.get("positions", [])
                 matches = [
                     p for p in positions
                     if department.lower() in (p.get("department","") or "").lower()
                 ]
-                
+
                 if not matches:
                     return None
-                    
+
                 # Get discovery URL ID
                 disc_id = profile_data.get("discoveryUrlId")
                 if not disc_id:
                     return None
-                    
+
                 # Collect unique department names and position titles
                 depts = sorted({p["department"].strip() for p in matches if p.get("department")})
                 titles = sorted({p["position"].strip() for p in positions if p.get("position")})
-                
+
                 return {
                     "disc_id": disc_id,
                     "name": f"{profile_data.get('firstName', '')} {profile_data.get('lastName', '')}",
@@ -962,19 +972,19 @@ class Tools:
                     "position": "; ".join(titles),
                     "url": f"https://scholars.uab.edu/{disc_id}"
                 }
-                
+
             except Exception as e:
                 print(f"Error processing ID {uid}: {str(e)}")
                 return None
-        
+
         # Use ThreadPoolExecutor for concurrent requests
         with ThreadPoolExecutor(max_workers=workers) as executor:
             # Submit all tasks
             future_to_id = {
-                executor.submit(fetch_and_filter, uid): uid 
+                executor.submit(fetch_and_filter, uid): uid
                 for uid in range(1, max_id + 1)
             }
-            
+
             # Process results as they complete
             for future in as_completed(future_to_id):
                 result = future.result()
@@ -984,7 +994,7 @@ class Tools:
                         seen_ids.add(disc_id)
                         if return_list:
                             faculty_list.append(result)
-        
+
         if return_list:
             return faculty_list
         return len(seen_ids)
@@ -992,15 +1002,15 @@ class Tools:
     async def get_faculty_list(self, department: str, __event_emitter__=None) -> str:
         """
         Get a list of all faculty members in a department.
-        
+
         :param department: The department name to search for
         :return: JSON string containing list of faculty members
         """
         await self._emit_status(f"Retrieving faculty list for department: {department}", __event_emitter__=__event_emitter__)
-        
+
         try:
             faculty_list = self.count_faculty_in_department(department, return_list=True)
-            
+
             if not faculty_list:
                 await self._emit_status(
                     "No faculty found in specified department",
@@ -1014,21 +1024,21 @@ class Tools:
                     "message": f"No faculty found in department: {department}",
                     "results": []
                 })
-            
+
             await self._emit_status(
                 f"Found {len(faculty_list)} faculty members in {department}",
                 status="complete",
                 done=True,
                 __event_emitter__=__event_emitter__
             )
-            
+
             return json.dumps({
                 "object": "faculty_list",
                 "status": "success",
                 "message": f"Found {len(faculty_list)} faculty members in {department}",
                 "results": faculty_list
             }, ensure_ascii=False, indent=2)
-            
+
         except Exception as e:
             await self._emit_status(
                 f"Error retrieving faculty list: {str(e)}",
@@ -1164,14 +1174,14 @@ class Tools:
     ) -> str:
         """
         Search for scholars with expertise matching the provided keywords.
-        
+
         Args:
             keywords: List of keywords to search for in scholar profiles
             start_id: Starting scholar ID to search from
             end_id: Ending scholar ID to search up to
             max_results: Maximum number of top matches to return
             __event_emitter__: Optional event emitter for status updates
-            
+
         Returns:
             str: JSON string containing the search results
         """
@@ -1180,14 +1190,14 @@ class Tools:
                 f"Searching for expertise in: {', '.join(keywords)}",
                 __event_emitter__=__event_emitter__
             )
-            
+
             # Step 1: Scan scholars by ID
             all_scholars = await self.scan_all_scholars_by_id(
                 start_id=start_id,
                 end_id=end_id,
                 __event_emitter__=__event_emitter__
             )
-            
+
             if not all_scholars:
                 return json.dumps({
                     "object": "expertise_search_results",
@@ -1195,12 +1205,12 @@ class Tools:
                     "message": "No scholars found in the specified range",
                     "results": []
                 })
-            
+
             await self._emit_status(
                 f"Found {len(all_scholars)} scholars to analyze",
                 __event_emitter__=__event_emitter__
             )
-            
+
             # Step 2: Aggregate expertise and filter by topic
             matches = []
             for scholar in all_scholars:
@@ -1215,7 +1225,7 @@ class Tools:
                         # Grants
                         " ".join(grant.get("title", "") for grant in scholar.get("grants", {}).get("list", [])),
                     ]).lower()
-                    
+
                     # Count keyword matches
                     match_count = sum(kw.lower() in expertise_text for kw in keywords)
                     if match_count > 0:
@@ -1227,11 +1237,11 @@ class Tools:
                         __event_emitter__=__event_emitter__
                     )
                     continue
-                    
+
             # Step 3: Rank by number of keyword matches
             matches.sort(reverse=True, key=lambda x: x[0])
             top_matches = matches[:max_results]
-            
+
             # Step 4: Format results
             results = []
             for score, scholar in top_matches:
@@ -1261,21 +1271,21 @@ class Tools:
                         __event_emitter__=__event_emitter__
                     )
                     continue
-                
+
             await self._emit_status(
                 f"Found {len(matches)} matches, returning top {len(top_matches)}",
                 status="complete",
                 done=True,
                 __event_emitter__=__event_emitter__
             )
-            
+
             return json.dumps({
                 "object": "expertise_search_results",
                 "status": "success",
                 "message": f"Found {len(matches)} matches for expertise in {', '.join(keywords)}",
                 "results": results
             }, indent=2)
-            
+
         except Exception as e:
             error_response = {
                 "object": "expertise_search_results",
@@ -1323,4 +1333,4 @@ async def get_faculty_by_id():
 # asyncio.run(search_faculty())
 # asyncio.run(get_department_faculty())
 # asyncio.run(get_faculty_by_id())
-""" 
+"""
